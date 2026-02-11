@@ -1,27 +1,25 @@
 // RUN: aster-opt %s --aster-amdgcn-bufferization --split-input-file | FileCheck %s
 
 // Simple diamond CFG: two allocas merge at block argument.
-// The pass should insert copies before each branch.
+// The pass should insert a single copy + coalesce before each branch.
 // CHECK-LABEL:   amdgcn.module @bufferization_phi_copies_1 target = <gfx942> isa = <cdna3> {
 // CHECK:           func.func private @rand() -> i1
 // CHECK:           kernel @bufferization_phi_copies_1 {
 // CHECK:             %[[CALL_0:.*]] = func.call @rand() : () -> i1
 // CHECK-DAG:         %[[VAL_0:.*]] = alloca : !amdgcn.vgpr
 // CHECK-DAG:         %[[VAL_1:.*]] = alloca : !amdgcn.vgpr
-// CHECK-DAG:         %[[VAL_2:.*]] = alloca : !amdgcn.vgpr<?>
+// CHECK-DAG:         %[[PHI:.*]] = alloca : !amdgcn.vgpr<?>
 // CHECK:             cf.cond_br %[[CALL_0]], ^bb1, ^bb2
 // CHECK:           ^bb1:
-// CHECK:             %[[VAL_3:.*]] = alloca : !amdgcn.vgpr
-// CHECK:             %[[COPY_0:.*]] = lsir.copy %[[VAL_3]], %[[VAL_0]] : !amdgcn.vgpr, !amdgcn.vgpr
-// CHECK:             %[[COPY_1:.*]] = lsir.copy %[[VAL_2]], %[[COPY_0]] : !amdgcn.vgpr<?>, !amdgcn.vgpr
+// CHECK:             lsir.copy %[[PHI]], %[[VAL_0]] : !amdgcn.vgpr<?>, !amdgcn.vgpr
+// CHECK:             reg_coalesce %[[PHI]], %[[VAL_0]] : !amdgcn.vgpr<?>, !amdgcn.vgpr
 // CHECK:             cf.br ^bb3
 // CHECK:           ^bb2:
-// CHECK:             %[[VAL_4:.*]] = alloca : !amdgcn.vgpr
-// CHECK:             %[[COPY_2:.*]] = lsir.copy %[[VAL_4]], %[[VAL_1]] : !amdgcn.vgpr, !amdgcn.vgpr
-// CHECK:             %[[COPY_3:.*]] = lsir.copy %[[VAL_2]], %[[COPY_2]] : !amdgcn.vgpr<?>, !amdgcn.vgpr
+// CHECK:             lsir.copy %[[PHI]], %[[VAL_1]] : !amdgcn.vgpr<?>, !amdgcn.vgpr
+// CHECK:             reg_coalesce %[[PHI]], %[[VAL_1]] : !amdgcn.vgpr<?>, !amdgcn.vgpr
 // CHECK:             cf.br ^bb3
 // CHECK:           ^bb3:
-// CHECK:             %[[VAL_5:.*]] = dealloc_cast %[[VAL_2]] : !amdgcn.vgpr<?>
+// CHECK:             %[[VAL_5:.*]] = dealloc_cast %[[PHI]] : !amdgcn.vgpr<?>
 // CHECK:             %[[VAL_6:.*]] = test_inst outs %[[VAL_5]] : (!amdgcn.vgpr) -> !amdgcn.vgpr
 // CHECK:             end_kernel
 // CHECK:           }
@@ -50,20 +48,18 @@ amdgcn.module @bufferization_phi_copies_1 target = <gfx942> isa = <cdna3> {
 // CHECK:           kernel @bufferization_same_phi_value {
 // CHECK:             %[[CALL_0:.*]] = func.call @rand() : () -> i1
 // CHECK-DAG:         %[[VAL_0:.*]] = alloca : !amdgcn.vgpr
-// CHECK-DAG:         %[[VAL_1:.*]] = alloca : !amdgcn.vgpr<?>
+// CHECK-DAG:         %[[PHI:.*]] = alloca : !amdgcn.vgpr<?>
 // CHECK:             cf.cond_br %[[CALL_0]], ^bb1, ^bb2
 // CHECK:           ^bb1:
-// CHECK:             %[[VAL_2:.*]] = alloca : !amdgcn.vgpr
-// CHECK:             %[[COPY_0:.*]] = lsir.copy %[[VAL_2]], %[[VAL_0]] : !amdgcn.vgpr, !amdgcn.vgpr
-// CHECK:             %[[COPY_1:.*]] = lsir.copy %[[VAL_1]], %[[COPY_0]] : !amdgcn.vgpr<?>, !amdgcn.vgpr
+// CHECK:             lsir.copy %[[PHI]], %[[VAL_0]] : !amdgcn.vgpr<?>, !amdgcn.vgpr
+// CHECK:             reg_coalesce %[[PHI]], %[[VAL_0]] : !amdgcn.vgpr<?>, !amdgcn.vgpr
 // CHECK:             cf.br ^bb3
 // CHECK:           ^bb2:
-// CHECK:             %[[VAL_3:.*]] = alloca : !amdgcn.vgpr
-// CHECK:             %[[COPY_2:.*]] = lsir.copy %[[VAL_3]], %[[VAL_0]] : !amdgcn.vgpr, !amdgcn.vgpr
-// CHECK:             %[[COPY_3:.*]] = lsir.copy %[[VAL_1]], %[[COPY_2]] : !amdgcn.vgpr<?>, !amdgcn.vgpr
+// CHECK:             lsir.copy %[[PHI]], %[[VAL_0]] : !amdgcn.vgpr<?>, !amdgcn.vgpr
+// CHECK:             reg_coalesce %[[PHI]], %[[VAL_0]] : !amdgcn.vgpr<?>, !amdgcn.vgpr
 // CHECK:             cf.br ^bb3
 // CHECK:           ^bb3:
-// CHECK:             %[[VAL_4:.*]] = dealloc_cast %[[VAL_1]] : !amdgcn.vgpr<?>
+// CHECK:             %[[VAL_4:.*]] = dealloc_cast %[[PHI]] : !amdgcn.vgpr<?>
 // CHECK:             test_inst ins %[[VAL_4]] : (!amdgcn.vgpr) -> ()
 // CHECK:             end_kernel
 // CHECK:           }
@@ -93,20 +89,18 @@ amdgcn.module @bufferization_same_phi_value target = <gfx942> isa = <cdna3> {
 // CHECK:             %[[CALL_0:.*]] = func.call @rand() : () -> i1
 // CHECK-DAG:         %[[VAL_0:.*]] = alloca : !amdgcn.sgpr
 // CHECK-DAG:         %[[VAL_1:.*]] = alloca : !amdgcn.sgpr
-// CHECK-DAG:         %[[VAL_2:.*]] = alloca : !amdgcn.sgpr<?>
+// CHECK-DAG:         %[[PHI:.*]] = alloca : !amdgcn.sgpr<?>
 // CHECK:             cf.cond_br %[[CALL_0]], ^bb1, ^bb2
 // CHECK:           ^bb1:
-// CHECK:             %[[VAL_3:.*]] = alloca : !amdgcn.sgpr
-// CHECK:             %[[COPY_0:.*]] = lsir.copy %[[VAL_3]], %[[VAL_0]] : !amdgcn.sgpr, !amdgcn.sgpr
-// CHECK:             %[[COPY_1:.*]] = lsir.copy %[[VAL_2]], %[[COPY_0]] : !amdgcn.sgpr<?>, !amdgcn.sgpr
+// CHECK:             lsir.copy %[[PHI]], %[[VAL_0]] : !amdgcn.sgpr<?>, !amdgcn.sgpr
+// CHECK:             reg_coalesce %[[PHI]], %[[VAL_0]] : !amdgcn.sgpr<?>, !amdgcn.sgpr
 // CHECK:             cf.br ^bb3
 // CHECK:           ^bb2:
-// CHECK:             %[[VAL_4:.*]] = alloca : !amdgcn.sgpr
-// CHECK:             %[[COPY_2:.*]] = lsir.copy %[[VAL_4]], %[[VAL_1]] : !amdgcn.sgpr, !amdgcn.sgpr
-// CHECK:             %[[COPY_3:.*]] = lsir.copy %[[VAL_2]], %[[COPY_2]] : !amdgcn.sgpr<?>, !amdgcn.sgpr
+// CHECK:             lsir.copy %[[PHI]], %[[VAL_1]] : !amdgcn.sgpr<?>, !amdgcn.sgpr
+// CHECK:             reg_coalesce %[[PHI]], %[[VAL_1]] : !amdgcn.sgpr<?>, !amdgcn.sgpr
 // CHECK:             cf.br ^bb3
 // CHECK:           ^bb3:
-// CHECK:             %[[VAL_5:.*]] = dealloc_cast %[[VAL_2]] : !amdgcn.sgpr<?>
+// CHECK:             %[[VAL_5:.*]] = dealloc_cast %[[PHI]] : !amdgcn.sgpr<?>
 // CHECK:             test_inst ins %[[VAL_5]] : (!amdgcn.sgpr) -> ()
 // CHECK:             end_kernel
 // CHECK:           }
@@ -131,6 +125,8 @@ amdgcn.module @bufferization_sgpr_copies target = <gfx942> isa = <cdna3> {
 // -----
 
 // Values derived from allocas (not raw allocas) - should still insert copies.
+// The copy source is the instruction result (value semantics), and the coalesce
+// targets the underlying alloca (storage).
 // CHECK-LABEL:   amdgcn.module @bufferization_derived_values target = <gfx942> isa = <cdna3> {
 // CHECK:           func.func private @rand() -> i1
 // CHECK:           kernel @bufferization_derived_values {
@@ -140,20 +136,18 @@ amdgcn.module @bufferization_sgpr_copies target = <gfx942> isa = <cdna3> {
 // CHECK-DAG:         %[[VAL_2:.*]] = alloca : !amdgcn.sgpr
 // CHECK:             %[[VAL_3:.*]] = test_inst outs %[[VAL_0]] ins %[[VAL_2]] : (!amdgcn.vgpr, !amdgcn.sgpr) -> !amdgcn.vgpr
 // CHECK:             %[[VAL_4:.*]] = test_inst outs %[[VAL_1]] ins %[[VAL_2]] : (!amdgcn.vgpr, !amdgcn.sgpr) -> !amdgcn.vgpr
-// CHECK:             %[[VAL_5:.*]] = alloca : !amdgcn.vgpr<?>
+// CHECK:             %[[PHI:.*]] = alloca : !amdgcn.vgpr<?>
 // CHECK:             cf.cond_br %[[CALL_0]], ^bb1, ^bb2
 // CHECK:           ^bb1:
-// CHECK:             %[[VAL_6:.*]] = alloca : !amdgcn.vgpr
-// CHECK:             %[[COPY_0:.*]] = lsir.copy %[[VAL_6]], %[[VAL_3]] : !amdgcn.vgpr, !amdgcn.vgpr
-// CHECK:             %[[COPY_1:.*]] = lsir.copy %[[VAL_5]], %[[COPY_0]] : !amdgcn.vgpr<?>, !amdgcn.vgpr
+// CHECK:             lsir.copy %[[PHI]], %[[VAL_3]] : !amdgcn.vgpr<?>, !amdgcn.vgpr
+// CHECK:             reg_coalesce %[[PHI]], %[[VAL_0]] : !amdgcn.vgpr<?>, !amdgcn.vgpr
 // CHECK:             cf.br ^bb3
 // CHECK:           ^bb2:
-// CHECK:             %[[VAL_7:.*]] = alloca : !amdgcn.vgpr
-// CHECK:             %[[COPY_2:.*]] = lsir.copy %[[VAL_7]], %[[VAL_4]] : !amdgcn.vgpr, !amdgcn.vgpr
-// CHECK:             %[[COPY_3:.*]] = lsir.copy %[[VAL_5]], %[[COPY_2]] : !amdgcn.vgpr<?>, !amdgcn.vgpr
+// CHECK:             lsir.copy %[[PHI]], %[[VAL_4]] : !amdgcn.vgpr<?>, !amdgcn.vgpr
+// CHECK:             reg_coalesce %[[PHI]], %[[VAL_1]] : !amdgcn.vgpr<?>, !amdgcn.vgpr
 // CHECK:             cf.br ^bb3
 // CHECK:           ^bb3:
-// CHECK:             %[[VAL_8:.*]] = dealloc_cast %[[VAL_5]] : !amdgcn.vgpr<?>
+// CHECK:             %[[VAL_8:.*]] = dealloc_cast %[[PHI]] : !amdgcn.vgpr<?>
 // CHECK:             test_inst ins %[[VAL_8]] : (!amdgcn.vgpr) -> ()
 // CHECK:             end_kernel
 // CHECK:           }

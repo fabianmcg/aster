@@ -10,6 +10,7 @@
 
 #include "aster/Dialect/AMDGCN/Analysis/Utils.h"
 #include "aster/Dialect/AMDGCN/IR/AMDGCNOps.h"
+#include "aster/Interfaces/InstOpInterface.h"
 #include "aster/Interfaces/RegisterType.h"
 
 using namespace mlir;
@@ -31,6 +32,17 @@ FailureOr<ValueRange> mlir::aster::amdgcn::getAllocasOrFailure(Value value) {
         return failure();
     }
     return makeRegisterRangeOp.getInputs();
+  }
+
+  // Handle instruction results: trace through DPS outs operand.
+  // In DPS, result[i] writes to outs[i], so trace outs[i] to its alloca.
+  if (auto instOp = dyn_cast_or_null<InstOpInterface>(value.getDefiningOp())) {
+    ResultRange results = instOp.getInstResults();
+    ValueRange outs = instOp.getInstOuts();
+    for (auto [res, out] : llvm::zip(results, outs)) {
+      if (res == value)
+        return getAllocasOrFailure(out);
+    }
   }
 
   // Fail in all other cases.

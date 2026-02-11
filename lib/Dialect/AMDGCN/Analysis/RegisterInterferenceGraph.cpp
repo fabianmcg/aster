@@ -25,20 +25,65 @@ using namespace mlir::aster;
 using namespace mlir::aster::amdgcn;
 
 RegisterInterferenceGraph::NodeID
+RegisterInterferenceGraph::canonical(NodeID id) const {
+  assert(id >= 0 && static_cast<size_t>(id) < mergeParent.size());
+  while (mergeParent[id] != id)
+    id = mergeParent[id];
+  return id;
+}
+
+void RegisterInterferenceGraph::mergeNodes(NodeID keep, NodeID remove) {
+  keep = canonical(keep);
+  remove = canonical(remove);
+  if (keep == remove)
+    return;
+  mergeParent[remove] = keep;
+  LDBG_OS([&](raw_ostream &os) {
+    os << "Merged node " << remove << " into " << keep << "\n";
+    os << "  keep: ";
+    values[keep].printAsOperand(os, OpPrintingFlags());
+    os << "\n  remove: ";
+    values[remove].printAsOperand(os, OpPrintingFlags());
+  });
+}
+
+RegisterInterferenceGraph::NodeID
 RegisterInterferenceGraph::getOrCreateNodeId(Value value) {
   auto it = valueToNodeId.find(value);
   if (it != valueToNodeId.end())
-    return it->second;
+    return canonical(it->second);
 
   NodeID id = values.size();
   values.push_back(value);
+  mergeParent.push_back(id);
   valueToNodeId[value] = id;
   return id;
 }
 
 RegisterInterferenceGraph::NodeID
 RegisterInterferenceGraph::getNodeId(Value value) const {
-  return valueToNodeId.lookup_or(value, -1);
+  NodeID id = valueToNodeId.lookup_or(value, -1);
+  if (id < 0)
+    return id;
+  return canonical(id);
+}
+
+RegisterInterferenceGraph::NodeID
+RegisterInterferenceGraph::getCanonical(NodeID id) const {
+  if (mergeParent.empty() || id < 0 ||
+      static_cast<size_t>(id) >= mergeParent.size())
+    return id;
+  return canonical(id);
+}
+
+SmallVector<RegisterInterferenceGraph::NodeID>
+RegisterInterferenceGraph::getMergedNodes(NodeID canonicalId) const {
+  SmallVector<NodeID> merged;
+  for (size_t i = 0; i < mergeParent.size(); ++i) {
+    if (static_cast<NodeID>(i) != canonicalId && canonical(i) == canonicalId)
+      merged.push_back(i);
+  }
+  return merged;
 }
 
 Value RegisterInterferenceGraph::getValue(NodeID nodeId) const {
@@ -116,6 +161,27 @@ LogicalResult RegisterInterferenceGraph::handleOp(Operation *op,
 
   SmallVector<Value> allocas;
 
+  // Handle RegCoalesceOp: merge operand allocas pairwise.
+  // Each operand should resolve to exactly one alloca. We merge them pairwise
+  // so that phi-equivalent allocas get the same register during coloring.
+  // Only process ops with exactly 2 inputs (the canonical pairwise form).
+  // Multi-operand coalesces are skipped since they can incorrectly merge
+  // range components that must have distinct registers.
+  if (auto regCoalesceOp = dyn_cast<RegCoalesceOp>(op)) {
+    if (regCoalesceOp.getInputs().size() != 2)
+      return success();
+    SmallVector<Value> lhsAllocas, rhsAllocas;
+    if (failed(getAllocasOrFailure(regCoalesceOp.getInputs()[0], lhsAllocas)) ||
+        failed(getAllocasOrFailure(regCoalesceOp.getInputs()[1], rhsAllocas)))
+      return op->emitError("IR is not in the `unallocated` normal form");
+    // Only merge when both sides resolve to a single alloca.
+    if (lhsAllocas.size() == 1 && rhsAllocas.size() == 1) {
+      mergeNodes(getOrCreateNodeId(lhsAllocas.front()),
+                 getOrCreateNodeId(rhsAllocas.front()));
+    }
+    return success();
+  }
+
   // Add edges between the inputs of the RegInterferenceOp. Note that these
   // edges shouldn't be mixed with the edges between the live values, as the
   // semantics of the operation only establish interference between its inputs.
@@ -162,6 +228,21 @@ LogicalResult RegisterInterferenceGraph::run(Operation *op,
   // Check if the walk was interrupted.
   if (result.wasInterrupted())
     return failure();
+
+  // Remap edges to use canonical node IDs after merging. Edges added before
+  // a merge may reference the old (non-canonical) node ID.
+  DenseSet<Edge> newEdgeSet;
+  SmallVector<Edge> newEdgeVector;
+  for (const Edge &e : edgeVector) {
+    NodeID src = canonical(e.first);
+    NodeID tgt = canonical(e.second);
+    if (src == tgt)
+      continue;
+    if (newEdgeSet.insert({src, tgt}).second)
+      newEdgeVector.push_back({src, tgt});
+  }
+  edgeSet = std::move(newEdgeSet);
+  edgeVector = std::move(newEdgeVector);
 
   // Set the number of nodes and compress the graph.
   setNumNodes(values.size());

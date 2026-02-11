@@ -172,6 +172,15 @@ RegisterLiveness::visitOperation(Operation *op,
                                  RegisterLivenessState *before) {
   DUMP_STATE_HELPER("op", OpWithFlags(op, OpPrintingFlags().skipRegions()));
 
+  // Constraint ops (reg_coalesce, reg_interference) are pure metadata
+  // annotations for register allocation. They have no liveness impact and may
+  // reference allocas with mixed type semantics (relocatable + unallocated)
+  // during the bufferization-to-register-semantics transition.
+  if (isa<amdgcn::RegCoalesceOp, amdgcn::RegInterferenceOp>(op)) {
+    propagateIfChanged(before, before->meet(after));
+    return success();
+  }
+
   // Check if the operation has value semantics.
   if (checkValueSemantics(op->getResults()) ||
       checkValueSemantics(op->getOperands())) {

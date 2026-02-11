@@ -8,6 +8,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "aster/Dialect/AMDGCN/Analysis/Utils.h"
 #include "aster/Dialect/AMDGCN/IR/AMDGCNOps.h"
 #include "aster/Dialect/AMDGCN/IR/Utils.h"
 #include "aster/Dialect/AMDGCN/Transforms/Passes.h"
@@ -165,12 +166,9 @@ static void removePotentiallyClobberedValues(Operation *op,
       copyAndPropagateValues(inst.getInstOuts(), rewriter, domInfo, inst);
       return;
     }
-    if (auto brOp = dyn_cast<BranchOpInterface>(op)) {
-      rewriter.setInsertionPoint(brOp);
-      LDBG() << "Handling clobbered values for: " << brOp;
-      copyAndPropagateValues(brOp->getOperands(), rewriter, domInfo, nullptr);
-      return;
-    }
+    // Branch operands are NOT processed here. Step 2 (handlePhiNode) creates
+    // phi allocas for all block arguments, which naturally prevents clobbering
+    // of branch operand values without requiring a separate copy layer.
   });
 }
 
@@ -489,6 +487,47 @@ void CFGSimplifier::handlePhiNode(BlockArgument bbArg, ArrayRef<Block *> blocks,
              .second)
       continue;
     lsir::CopyOp::create(rewriter, bbArg.getLoc(), alloc, operand->get());
+  }
+
+  // Emit coalesce ops declaring the fresh alloca and original alloca(s) should
+  // be merged in the interference graph. This enables RegisterColoring to
+  // assign them the same register, making the copies above into self-copies.
+  // Placed before each branch (in the predecessor block) to satisfy dominance.
+  //
+  // For ranges (e.g., vgpr_range<[? + 4]>), emit pairwise coalesces between
+  // corresponding fresh and original allocas to preserve contiguity:
+  //   reg_coalesce %fresh[i], %orig[i]  (not cross-merging all components)
+  SmallVector<Value> freshAllocas;
+  if (succeeded(getAllocasOrFailure(alloc, freshAllocas))) {
+    for (OpOperand *operand : operands) {
+      SmallVector<Value> origAllocas;
+      if (failed(getAllocasOrFailure(operand->get(), origAllocas)))
+        continue;
+
+      // Place coalesce in the predecessor block (before the branch).
+      // Both fresh alloca (at NCD, dominates everything) and original alloca
+      // (in this block or dominating it) are available here.
+      rewriter.setInsertionPoint(operand->getOwner());
+
+      if (freshAllocas.size() == origAllocas.size()) {
+        // Pairwise coalesce: fresh[i] with orig[i].
+        for (auto [fresh, orig] : llvm::zip(freshAllocas, origAllocas)) {
+          if (fresh == orig)
+            continue;
+          RegCoalesceOp::create(rewriter, bbArg.getLoc(),
+                                SmallVector<Value>{fresh, orig});
+        }
+      } else {
+        // Mismatched sizes: emit best-effort coalesces.
+        for (Value origAlloc : origAllocas) {
+          if (llvm::is_contained(freshAllocas, origAlloc))
+            continue;
+          SmallVector<Value> coalesceInputs(freshAllocas);
+          coalesceInputs.push_back(origAlloc);
+          RegCoalesceOp::create(rewriter, bbArg.getLoc(), coalesceInputs);
+        }
+      }
+    }
   }
 
   // Replace the block argument with the new allocation.

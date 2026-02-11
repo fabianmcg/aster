@@ -393,11 +393,11 @@ void ToRegisterSemantics::runOnOperation() {
   Operation *op = getOperation();
   MLIRContext *ctx = op->getContext();
   RewritePatternSet patterns(ctx);
-  patterns
-      .add<AllocaOpPattern, InstOpPattern, MakeRegisterRangePattern,
-           SplitRegisterRangePattern, GenericOpPattern<lsir::CmpIOp>,
-           GenericOpPattern<amdgcn::RegInterferenceOp>, DeallocCastOpPattern>(
-          ctx);
+  patterns.add<AllocaOpPattern, InstOpPattern, MakeRegisterRangePattern,
+               SplitRegisterRangePattern, GenericOpPattern<lsir::CmpIOp>,
+               GenericOpPattern<amdgcn::RegInterferenceOp>,
+               GenericOpPattern<amdgcn::RegCoalesceOp>, DeallocCastOpPattern>(
+      ctx);
   if (failed(applyPatternsAndFoldGreedily(
           op, std::move(patterns),
           GreedyRewriteConfig()

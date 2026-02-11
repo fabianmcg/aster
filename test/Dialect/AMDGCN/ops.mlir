@@ -19,6 +19,21 @@ func.func @test_make_register_range_single() {
   return
 }
 
+func.func @test_reg_coalesce() {
+  %0 = amdgcn.alloca : !amdgcn.vgpr
+  %1 = amdgcn.alloca : !amdgcn.vgpr
+  amdgcn.reg_coalesce %0, %1 : !amdgcn.vgpr, !amdgcn.vgpr
+  return
+}
+
+func.func @test_reg_coalesce_sgpr() {
+  %0 = amdgcn.alloca : !amdgcn.sgpr
+  %1 = amdgcn.alloca : !amdgcn.sgpr
+  %2 = amdgcn.alloca : !amdgcn.sgpr
+  amdgcn.reg_coalesce %0, %1, %2 : !amdgcn.sgpr, !amdgcn.sgpr, !amdgcn.sgpr
+  return
+}
+
 amdgcn.module @test_module target = #amdgcn.target<gfx940> isa = #amdgcn.isa<cdna3> {
   amdgcn.kernel @test_kernel {
     %0 = amdgcn.alloca : !amdgcn.vgpr

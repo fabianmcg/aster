@@ -118,8 +118,10 @@ struct RegisterAllocator {
 private:
   /// Collect the allocation constraints for the given node.
   LogicalResult collectConstraints(NodeId nodeId, ArrayRef<Value> nodes);
-  /// Allocate memory for a register node.
-  LogicalResult alloc(Value alloca);
+  /// Allocate memory for a register node. Returns the allocation on success.
+  FailureOr<Allocation> alloc(Value alloca);
+  /// Allocate a merged node to the same register as its canonical node.
+  LogicalResult allocAs(Value alloca, const Allocation &allocation);
 
   RegisterInterferenceGraph &graph;
   const RangeConstraintAnalysis &rangeAnalysis;
@@ -149,6 +151,13 @@ struct RegInterferenceOpPattern : public OpRewritePattern<RegInterferenceOp> {
   using Base::Base;
 
   LogicalResult matchAndRewrite(RegInterferenceOp op,
+                                PatternRewriter &rewriter) const override;
+};
+
+struct RegCoalesceOpPattern : public OpRewritePattern<RegCoalesceOp> {
+  using Base::Base;
+
+  LogicalResult matchAndRewrite(RegCoalesceOp op,
                                 PatternRewriter &rewriter) const override;
 };
 
@@ -268,7 +277,27 @@ LogicalResult RegisterAllocator::collectConstraints(NodeId nodeId,
   return success();
 }
 
-LogicalResult RegisterAllocator::alloc(Value alloca) {
+/// Replace an alloca with a new alloca at the given register, updating the
+/// graph. This is the common code shared by alloc() and allocAs().
+static void replaceAllocaWithRegister(AllocaOp allocaOp,
+                                      AMDGCNRegisterTypeInterface regTy,
+                                      Register reg, IRRewriter &rewriter,
+                                      RegisterInterferenceGraph &graph) {
+  // Look up the node ID before erasing the alloca.
+  auto nodeId = graph.getNodeId(allocaOp.getResult());
+  assert(nodeId >= 0 && "node not found in graph");
+
+  rewriter.setInsertionPoint(allocaOp);
+  AllocaOp newAlloca = AllocaOp::create(rewriter, allocaOp.getLoc(),
+                                        regTy.cloneRegisterType(reg));
+  auto cOp = UnrealizedConversionCastOp::create(rewriter, allocaOp.getLoc(),
+                                                regTy, newAlloca.getResult());
+  cOp->setAttr(kCastOpTag, rewriter.getUnitAttr());
+  rewriter.replaceOp(allocaOp, cOp.getResult(0));
+  graph.getValues()[nodeId] = newAlloca.getResult();
+}
+
+FailureOr<Allocation> RegisterAllocator::alloc(Value alloca) {
   auto regTy = dyn_cast<AMDGCNRegisterTypeInterface>(alloca.getType());
   int64_t numRegs = 1;
   int64_t alignment = 1;
@@ -282,32 +311,29 @@ LogicalResult RegisterAllocator::alloc(Value alloca) {
   }
 
   // Try to allocate the registers.
-  FailureOr<Allocation> alloc = constraints.alloc(regTy, numRegs, alignment);
-  if (failed(alloc))
+  FailureOr<Allocation> allocation =
+      constraints.alloc(regTy, numRegs, alignment);
+  if (failed(allocation))
     return emitError(alloca.getLoc()) << "failed to allocate the registers";
 
   // Replace the alloca with the new alloca.
   for (auto [i, alloca] : llvm::enumerate(allocas)) {
-    // Get the alloca and set the insertion point.
     auto allocaOp = cast<AllocaOp>(alloca.getDefiningOp());
-    rewriter.setInsertionPoint(allocaOp);
-
-    // Create the new alloca.
-    Register reg = alloc->getBegin().getWithOffset(i);
-    AllocaOp newAlloca = AllocaOp::create(rewriter, allocaOp.getLoc(),
-                                          regTy.cloneRegisterType(reg));
-
-    // Cast back to the original type.
-    auto cOp = UnrealizedConversionCastOp::create(rewriter, allocaOp.getLoc(),
-                                                  regTy, newAlloca.getResult());
-    cOp->setAttr(kCastOpTag, rewriter.getUnitAttr());
-
-    // Update the graph and the IR.
-    rewriter.replaceOp(allocaOp, cOp.getResult(0));
-    NodeId nodeId = graph.getNodeId(alloca);
-    assert(nodeId >= 0 && "node not found in graph");
-    graph.getValues()[nodeId] = newAlloca.getResult();
+    Register reg = allocation->getBegin().getWithOffset(i);
+    replaceAllocaWithRegister(allocaOp, regTy, reg, rewriter, graph);
   }
+  return allocation;
+}
+
+LogicalResult RegisterAllocator::allocAs(Value alloca,
+                                         const Allocation &allocation) {
+  auto regTy = dyn_cast<AMDGCNRegisterTypeInterface>(alloca.getType());
+  auto allocaOp = dyn_cast_or_null<AllocaOp>(alloca.getDefiningOp());
+  if (!allocaOp || !regTy)
+    return emitError(alloca.getLoc())
+           << "expected alloca op for merged node allocation";
+  replaceAllocaWithRegister(allocaOp, regTy, allocation.getBegin(), rewriter,
+                            graph);
   return success();
 }
 
@@ -320,6 +346,11 @@ LogicalResult RegisterAllocator::run(Operation *op) {
   llvm::DenseSet<NodeId> visited;
   ArrayRef<Value> nodes = graph.getValues();
   for (auto [i, node] : llvm::enumerate(nodes)) {
+    // Skip merged (non-canonical) nodes - they'll be allocated when
+    // their canonical node is allocated.
+    if (graph.getCanonical(i) != static_cast<NodeId>(i))
+      continue;
+
     // Skip already visited or allocated nodes.
     if (!visited.insert(i).second || !needsAllocation(node))
       continue;
@@ -336,9 +367,40 @@ LogicalResult RegisterAllocator::run(Operation *op) {
       constraints.print(os);
     });
 
-    // Allocate the node.
-    if (failed(alloc(node)))
+    // Before allocating, collect node IDs for all range members so we can
+    // process their merged nodes after alloc() replaces the allocas.
+    SmallVector<std::pair<NodeId, int64_t>> rangeNodeIds;
+    if (const RangeConstraint *constraint = rangeAnalysis.lookup(node)) {
+      for (auto [idx, rangeAlloca] : llvm::enumerate(constraint->allocations)) {
+        auto nid = graph.getNodeId(rangeAlloca);
+        if (nid >= 0)
+          rangeNodeIds.push_back({nid, idx});
+      }
+    } else {
+      rangeNodeIds.push_back({static_cast<NodeId>(i), 0});
+    }
+
+    // Allocate the canonical node (may allocate an entire range).
+    FailureOr<Allocation> allocation = alloc(node);
+    if (failed(allocation))
       return failure();
+
+    // Allocate merged nodes. When the canonical node has a range constraint,
+    // alloc() allocated ALL range members. Each range member may have its own
+    // merged nodes that need to be allocated at the corresponding offset.
+    for (auto [rangeNodeId, offset] : rangeNodeIds) {
+      Register reg = allocation->getBegin().getWithOffset(offset);
+      for (NodeId mergedId : graph.getMergedNodes(rangeNodeId)) {
+        Value mergedNode = graph.getValues()[mergedId];
+        if (needsAllocation(mergedNode)) {
+          LDBG() << "Allocating merged node[" << mergedId << "]: " << mergedNode
+                 << " (same register as node[" << rangeNodeId << "])";
+          Allocation mergedAlloc(reg.getRegister(), 1, allocation->kind);
+          if (failed(allocAs(mergedNode, mergedAlloc)))
+            return failure();
+        }
+      }
+    }
 
     LDBG_OS([&](raw_ostream &os) {
       os << " Final constraints: ";
@@ -451,6 +513,13 @@ MakeRegisterRangeOpPattern::matchAndRewrite(MakeRegisterRangeOp op,
 LogicalResult
 RegInterferenceOpPattern::matchAndRewrite(RegInterferenceOp op,
                                           PatternRewriter &rewriter) const {
+  rewriter.eraseOp(op);
+  return success();
+}
+
+LogicalResult
+RegCoalesceOpPattern::matchAndRewrite(RegCoalesceOp op,
+                                      PatternRewriter &rewriter) const {
   rewriter.eraseOp(op);
   return success();
 }
@@ -585,8 +654,8 @@ LogicalResult RegisterColoring::run(FunctionOpInterface funcOp) {
 
   RewritePatternSet patterns(&getContext());
   patterns.add<InstRewritePattern, MakeRegisterRangeOpPattern,
-               RegInterferenceOpPattern, CopyOpPattern, SOP1OpPattern,
-               VOP1OpPattern>(&getContext());
+               RegInterferenceOpPattern, RegCoalesceOpPattern, CopyOpPattern,
+               SOP1OpPattern, VOP1OpPattern>(&getContext());
   FrozenRewritePatternSet frozenPatterns(std::move(patterns));
   if (failed(applyPatternsGreedily(
           funcOp, frozenPatterns,

@@ -46,6 +46,13 @@ struct RegisterInterferenceGraph : public Graph {
   ArrayRef<Value> getValues() const { return values; }
   MutableArrayRef<Value> getValues() { return values; }
 
+  /// Get the canonical (root) node ID for a possibly-merged node.
+  /// Returns the input ID if the node was never merged.
+  NodeID getCanonical(NodeID id) const;
+
+  /// Get all node IDs that were merged into the given canonical node.
+  SmallVector<NodeID> getMergedNodes(NodeID canonicalId) const;
+
 private:
   RegisterInterferenceGraph() : Graph(/*directed=*/false) {}
 
@@ -64,8 +71,17 @@ private:
   /// Get or create a node ID for an allocation.
   NodeID getOrCreateNodeId(Value allocation);
 
+  /// Merge node `remove` into node `keep`. All future lookups for values
+  /// that mapped to `remove` will return `keep`.
+  void mergeNodes(NodeID keep, NodeID remove);
+
+  /// Get the canonical (root) node ID, following merge chains.
+  NodeID canonical(NodeID id) const;
+
   SmallVector<Value> values;
   llvm::DenseMap<Value, NodeID> valueToNodeId;
+  /// Merge parent map: merged[id] = parent. Root nodes point to themselves.
+  SmallVector<NodeID> mergeParent;
 };
 
 } // namespace mlir::aster::amdgcn

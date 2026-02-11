@@ -413,6 +413,40 @@ def AMDGCN_RegInterferenceOp : AMDGCN_Op<"reg_interference"> {
 }
 
 //===----------------------------------------------------------------------===//
+// RegCoalesceOp
+//===----------------------------------------------------------------------===//
+
+def CoalesceOperands : Variadic<RegisterTypeInterface> {
+  let minSize = 2;
+}
+
+def AMDGCN_RegCoalesceOp : AMDGCN_Op<"reg_coalesce"> {
+  let summary = "Declare register coalescing between values";
+  let description = [{
+    The `amdgcn.reg_coalesce` operation declares that the given register values
+    are phi-equivalent and should be merged into a single node in the
+    interference graph. This forces them to be allocated to the same register,
+    making copies between them into self-copies that get eliminated.
+
+    This is the dual of `amdgcn.reg_interference`: interference says values
+    must NOT share a register, coalesce says they MUST share a register.
+
+    Inserted by AMDGCNBufferization when converting block arguments to
+    alloca+copy patterns: the fresh alloca and the original alloca that flows
+    through the block argument are declared as coalesced.
+
+    Example:
+    ```mlir
+    amdgcn.reg_coalesce %fresh_alloc, %orig_alloc : !amdgcn.vgpr, !amdgcn.vgpr
+    ```
+  }];
+  let arguments = (ins CoalesceOperands:$inputs);
+  let assemblyFormat = [{
+    $inputs attr-dict `:` type($inputs)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // SplitRegisterRangeOp
 //===----------------------------------------------------------------------===//
 
