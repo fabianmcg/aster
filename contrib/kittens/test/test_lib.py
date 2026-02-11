@@ -45,6 +45,7 @@ def run_kittens_kernel(
     template_substitutions: Optional[Dict[str, str]] = None,
     print_ir_after_all: bool = False,
     print_preprocessed_ir: bool = False,
+    block_dim: tuple = (64, 1, 1),
 ) -> None:
     """Thin wrapper around compile_and_run_kernel for kittens tests."""
     # Print test information
@@ -71,7 +72,7 @@ def run_kittens_kernel(
             input_args=input_args,
             output_args=output_args,
             grid_dim=(1, 1, 1),
-            block_dim=(64, 1, 1),
+            block_dim=block_dim,
             verify_fn=None,
             mcpu=MCPU,
             wavefront_size=WAVEFRONT_SIZE,
@@ -237,6 +238,132 @@ class TestKittensGEMMLoop:
         np.testing.assert_allclose(C_output, expected, rtol=1e-2, atol=1e-2)
 
 
+class TestKittensGEMM2Wave:
+    """Test 2-wave GEMM: C[32x16] = A[32xK] @ B[16xK]^T.
+
+    2x1 wave grid: wave 0 computes C[0:16, 0:16], wave 1 computes C[16:32, 0:16].
+    Both waves share the same B matrix, each loads its own A rows.
+    """
+
+    @pytest.mark.parametrize("k", [32, 64, 128])
+    def test_gemm_2wave(self, k):
+        """2-wave GEMM should compute C = A @ B^T correctly."""
+        k_tiles = k // 16
+        stride_ab = k * 2
+
+        np.random.seed(42 + k)
+        A = (np.random.randn(32, k) * 0.1).astype(np.float16)
+        B = (np.random.randn(16, k) * 0.1).astype(np.float16)
+        C_output = np.zeros(32 * 16, dtype=np.float32)
+
+        run_kittens_kernel(
+            mlir_file=get_mlir_file("test_gemm_2wave.mlir"),
+            kernel_name="gemm_2wave",
+            input_args=[A.flatten(), B.flatten()],
+            output_args=[C_output],
+            pass_pipeline=TEST_SCF_PIPELINING_PASS_PIPELINE,
+            block_dim=(128, 1, 1),
+            template_substitutions={
+                "{{K}}": str(k),
+                "{{K_TILES}}": str(k_tiles),
+                "{{STRIDE_AB}}": str(stride_ab),
+            },
+        )
+
+        expected = (A.astype(np.float32) @ B.astype(np.float32).T).flatten()
+        np.testing.assert_allclose(C_output, expected, rtol=1e-2, atol=1e-2)
+
+
+class TestKittensGEMM4Wave:
+    """Test 4-wave GEMM: C[32x32] = A[32xK] @ B[32xK]^T.
+
+    2x2 wave grid:
+      Wave 0: C[0:16, 0:16],   Wave 1: C[0:16, 16:32]
+      Wave 2: C[16:32, 0:16],  Wave 3: C[16:32, 16:32]
+    Each wave loads its own A rows and B rows based on grid position.
+    """
+
+    @pytest.mark.parametrize("k", [32, 64, 128])
+    def test_gemm_4wave(self, k):
+        """4-wave GEMM should compute C = A @ B^T correctly."""
+        k_tiles = k // 16
+        stride_ab = k * 2
+
+        np.random.seed(42 + k)
+        A = (np.random.randn(32, k) * 0.1).astype(np.float16)
+        B = (np.random.randn(32, k) * 0.1).astype(np.float16)
+        C_output = np.zeros(32 * 32, dtype=np.float32)
+
+        run_kittens_kernel(
+            mlir_file=get_mlir_file("test_gemm_4wave.mlir"),
+            kernel_name="gemm_4wave",
+            input_args=[A.flatten(), B.flatten()],
+            output_args=[C_output],
+            pass_pipeline=TEST_SCF_PIPELINING_PASS_PIPELINE,
+            block_dim=(256, 1, 1),
+            template_substitutions={
+                "{{K}}": str(k),
+                "{{K_TILES}}": str(k_tiles),
+                "{{STRIDE_AB}}": str(stride_ab),
+            },
+        )
+
+        expected = (A.astype(np.float32) @ B.astype(np.float32).T).flatten()
+        np.testing.assert_allclose(C_output, expected, rtol=1e-2, atol=1e-2)
+
+
+def lds_2wave_substitutions(k, lds_mode):
+    """Build template substitutions for 2-wave LDS GEMM tests."""
+    k_tiles = k // 16
+    stride_ab = k * 2
+    tile_bytes = 544 if lds_mode == 1 else 512
+    total_lds = tile_bytes * 3  # 3 tiles: A0, A1, B_shared
+    return {
+        "{{K}}": str(k),
+        "{{K_TILES}}": str(k_tiles),
+        "{{STRIDE_AB}}": str(stride_ab),
+        "{{LDS_MODE}}": str(lds_mode),
+        "{{LDS_BYTES}}": str(total_lds),
+    }
+
+
+LDS_2WAVE_MODE_NAMES = {0: "nopad", 1: "padded", 2: "xor_swizzle"}
+LDS_2WAVE_IDS = [LDS_2WAVE_MODE_NAMES[m] for m in [0, 1, 2]]
+
+
+class TestKittensGEMM2WaveLDS:
+    """Test 2-wave GEMM with LDS: C[32x16] = A[32xK] @ B[16xK]^T.
+
+    2x1 wave grid with shared cooperative LDS loading:
+      - Each wave loads its own A tile into per-wave LDS buffer
+      - Both waves redundantly load shared B tile
+      - s_barrier synchronizes before LDS reads
+    Tests all three LDS addressing modes.
+    """
+
+    @pytest.mark.parametrize("lds_mode", [0, 1, 2], ids=LDS_2WAVE_IDS)
+    @pytest.mark.parametrize("k", [32, 64, 128])
+    def test_gemm_2wave_lds(self, k, lds_mode):
+        """2-wave LDS GEMM should compute C = A @ B^T correctly."""
+        np.random.seed(42 + k)
+        A = (np.random.randn(32, k) * 0.1).astype(np.float16)
+        B = (np.random.randn(16, k) * 0.1).astype(np.float16)
+        C_output = np.zeros(32 * 16, dtype=np.float32)
+
+        run_kittens_kernel(
+            mlir_file=get_mlir_file("test_gemm_2wave_lds.mlir"),
+            kernel_name="gemm_2wave_lds",
+            input_args=[A.flatten(), B.flatten()],
+            output_args=[C_output],
+            pass_pipeline=TEST_SCF_PIPELINING_PASS_PIPELINE,
+            block_dim=(128, 1, 1),
+            template_substitutions=lds_2wave_substitutions(k, lds_mode),
+        )
+
+        expected = (A.astype(np.float32) @ B.astype(np.float32).T).flatten()
+        np.testing.assert_allclose(C_output, expected, rtol=1e-2, atol=1e-2)
+
+
 LDS_MODE_NAMES = {0: "nopad", 1: "padded", 2: "xor_swizzle"}
 
 
@@ -364,6 +491,17 @@ if __name__ == "__main__":
     run_test(TestKittensGEMM().test_gemm_16x16x32)
     for k in [32, 64, 128, 4096]:
         run_test(TestKittensGEMMLoop().test_gemm_16x16xK, k=k)
+    for k in [32, 64, 128]:
+        run_test(TestKittensGEMM2Wave().test_gemm_2wave, k=k)
+    for k in [32, 64, 128]:
+        run_test(TestKittensGEMM4Wave().test_gemm_4wave, k=k)
+    for lds_mode in [0, 1, 2]:
+        for k in [32, 64, 128]:
+            run_test(
+                TestKittensGEMM2WaveLDS().test_gemm_2wave_lds,
+                k=k,
+                lds_mode=lds_mode,
+            )
     for num_buffers, lds_mode in LDS_GEMM_PARAMS:
         for k in LDS_BUF_K_VALUES[num_buffers]:
             run_test(

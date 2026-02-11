@@ -82,6 +82,51 @@ amdgcn.library @kittens_lds_16x16 isa = [#amdgcn.isa<cdna3>] {
   }
 
   //===--------------------------------------------------------------------===//
+  // LDS Allocation Functions - 2-Wave (3 tiles: A0, A1, B shared)
+  //===--------------------------------------------------------------------===//
+  // For 2-wave multi-wave kernels with shared cooperative LDS loading.
+  // Each wave has its own A tile; B tile is shared across both waves.
+
+  // 2-wave 1-buffer padded: 3 tiles x 544 = 1,632 bytes total
+  func.func private @alloc_lds_2wave_1buffer() -> (index, index, index) {
+    %A0_alloc = amdgcn.alloc_lds 544
+    %A1_alloc = amdgcn.alloc_lds 544
+    %B_alloc  = amdgcn.alloc_lds 544
+
+    %A0 = amdgcn.get_lds_offset %A0_alloc : index
+    %A1 = amdgcn.get_lds_offset %A1_alloc : index
+    %B  = amdgcn.get_lds_offset %B_alloc  : index
+
+    return %A0, %A1, %B : index, index, index
+  }
+
+  // 2-wave 1-buffer nopad: 3 tiles x 512 = 1,536 bytes total
+  func.func private @alloc_lds_2wave_1buffer_nopad() -> (index, index, index) {
+    %A0_alloc = amdgcn.alloc_lds 512
+    %A1_alloc = amdgcn.alloc_lds 512
+    %B_alloc  = amdgcn.alloc_lds 512
+
+    %A0 = amdgcn.get_lds_offset %A0_alloc : index
+    %A1 = amdgcn.get_lds_offset %A1_alloc : index
+    %B  = amdgcn.get_lds_offset %B_alloc  : index
+
+    return %A0, %A1, %B : index, index, index
+  }
+
+  // 2-wave 1-buffer xor_swizzle: 3 tiles x 512 = 1,536 bytes total
+  func.func private @alloc_lds_2wave_1buffer_xor_swizzle() -> (index, index, index) {
+    %A0_alloc = amdgcn.alloc_lds 512
+    %A1_alloc = amdgcn.alloc_lds 512
+    %B_alloc  = amdgcn.alloc_lds 512
+
+    %A0 = amdgcn.get_lds_offset %A0_alloc : index
+    %A1 = amdgcn.get_lds_offset %A1_alloc : index
+    %B  = amdgcn.get_lds_offset %B_alloc  : index
+
+    return %A0, %A1, %B : index, index, index
+  }
+
+  //===--------------------------------------------------------------------===//
   // LDS Allocation Functions - No Padding (512 bytes/tile, HAS bank conflicts)
   //===--------------------------------------------------------------------===//
   // Same layout as XOR swizzle (512 bytes/tile) but with naive addressing.
