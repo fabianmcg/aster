@@ -32,6 +32,10 @@ struct RegAllocPipelineOptions
       *this, "mode",
       llvm::cl::desc("Graph build mode: \"minimal\" (default) or \"full\""),
       llvm::cl::init("minimal")};
+  mlir::detail::PassOptions::Option<bool> optimize{
+      *this, "optimize",
+      llvm::cl::desc("Run optimizeGraph to coalesce non-interfering nodes"),
+      llvm::cl::init(true)};
 };
 
 /// Build the RegAlloc pass pipeline.
@@ -50,6 +54,7 @@ static void buildRegAllocPassPipeline(OpPassManager &pm,
   pm.addPass(createRegisterDCE());
   RegisterColoringOptions coloringOpts;
   coloringOpts.buildMode = options.buildMode;
+  coloringOpts.optimize = options.optimize;
   pm.addPass(createRegisterColoring(coloringOpts));
   pm.addPass(createHoistOps());
 }
