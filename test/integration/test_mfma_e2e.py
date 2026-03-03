@@ -50,17 +50,8 @@ def test_mfma_e2e_kernel(
         wavefront_size=wavefront_size,
         verify_fn=verify_fn,
         library_paths=[_REGISTER_INIT],
-        skip_on_cross_compile=True,
     )
 
 
 if __name__ == "__main__":
-    test_mfma_e2e_kernel(
-        mlir_filename="mfma-to-global-store-scheduled-allocated-1x1x1.mlir",
-        kernel_name="test_matmul_kernel",
-        m=16,
-        n=16,
-        k=16,
-        pass_pipeline=DEFAULT_SROA_PASS_PIPELINE,
-        mcpu="gfx942",
-    )
+    pytest.main([__file__, "-v", "-s"])

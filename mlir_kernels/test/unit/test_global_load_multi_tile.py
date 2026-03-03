@@ -1,6 +1,7 @@
 """Unit tests for copies.mlir library functions."""
 
 import numpy as np
+import pytest
 
 from aster.testing import compile_and_run
 
@@ -136,12 +137,8 @@ class TestGlobalLoadMultiTile:
                 print(f"Differences found at indices: {diff_indices}")
                 print(f"Output: {output[diff_indices]}")
                 print(f"Expected: {input_data[diff_indices]}")
+            np.testing.assert_array_equal(output, input_data)
 
 
 if __name__ == "__main__":
-    # Run all tests
-    TestStoreToGlobalDwordWait().test_store_dword()
-    TestStoreToGlobalDwordx2Wait().test_store_dwordx2()
-    TestStoreToGlobalDwordx3Wait().test_store_dwordx3()
-    TestStoreToGlobalDwordx4Wait().test_store_dwordx4()
-    TestGlobalLoadMultiTile().test_load_multi_tile_2x4_with_offsets()
+    pytest.main([__file__, "-v", "-s"])
