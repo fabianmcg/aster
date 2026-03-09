@@ -43,7 +43,8 @@ cmake "$LLVM_SRC" -GNinja \
   -DMLIR_BUILD_MLIR_C_DYLIB=ON \
   -DCMAKE_PREFIX_PATH="$(rocm-sdk path --cmake)/hip" \
   -DHIP_PLATFORM=amd \
-  -DLLVM_CCACHE_BUILD=ON
+  -DLLVM_CCACHE_BUILD=ON \
+  -DLLVM_USE_LINKER=lld
 
 ninja install
 
@@ -138,7 +139,8 @@ deactivate ;  unset PYTHONPATH; source .aster-wt-${WORKTREE_NAME}/bin/activate
     -DCMAKE_INSTALL_PREFIX="../.aster-wt-${WORKTREE_NAME}" \
     -DLLVM_EXTERNAL_LIT=${VIRTUAL_ENV}/bin/lit \
     -DCMAKE_PREFIX_PATH="$(rocm-sdk path --cmake)/hip" \
-    -DHIP_PLATFORM=amd;
+    -DHIP_PLATFORM=amd \
+    -DLLVM_USE_LINKER=lld;
 
   ninja install;
 )
@@ -173,6 +175,11 @@ and pytest files (GPU execution). Lit tests run cross-platform; pytest requires 
 
 ## Notes
 
+- Linker: Both cmake commands above pass `-DLLVM_USE_LINKER=lld` which uses the
+  LLVM linker. This is much faster than the default GNU `ld` on Linux (link times
+  drop from minutes to seconds). Alternatively, `mold` is even faster:
+  `-DLLVM_USE_LINKER=mold` (install via `apt install mold` or `dnf install mold`).
+  On macOS the system linker is already fast so this flag is a no-op.
 - ccache: Never clean it (incremental builds)
 - Each worktree has own `build/` and `.aster-wt-${WORKTREE_NAME}/` directories
 - All worktrees use same `${HOME}/shared-llvm`
