@@ -752,6 +752,16 @@ if [ "$NEED_RECONFIGURE" = false ]; then
     ok "cmake already configured (build/CMakeCache.txt exists)"
     echo "     To force reconfigure: rm $BUILD_DIR/CMakeCache.txt && re-run"
 else
+    # Use lld for faster link times if available
+    ASTER_LINKER_FLAGS=""
+    if command -v ld.lld >/dev/null 2>&1; then
+        ASTER_LINKER_FLAGS="-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld -DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=lld"
+        ok "Using lld for ASTER link"
+    elif command -v ld.mold >/dev/null 2>&1; then
+        ASTER_LINKER_FLAGS="-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=mold -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=mold -DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=mold"
+        ok "Using mold for ASTER link"
+    fi
+
     echo "  Configuring cmake..."
     if CMAKE_PREFIX_PATH="$LLVM_INSTALL" "$VIRTUAL_ENV/bin/cmake" \
         -S "$ASTER_DIR" -B "$BUILD_DIR" -GNinja \
@@ -764,6 +774,7 @@ else
         -DPython_EXECUTABLE="$VIRTUAL_ENV/bin/python" \
         -DPython3_EXECUTABLE="$VIRTUAL_ENV/bin/python" \
         -DLLVM_CCACHE_BUILD=ON \
+        $ASTER_LINKER_FLAGS \
         $CMAKE_EXTRA_FLAGS; then
         ok "cmake configured"
     else
