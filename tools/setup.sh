@@ -186,14 +186,18 @@ if [ ${#MISSING[@]} -gt 0 ]; then
             echo "  If you don't have Homebrew: https://brew.sh"
             ;;
         debian)
-            echo "  sudo apt-get update && sudo apt-get install -y python3 python3-venv git cmake ninja-build clang lld ccache"
-            echo "  uv python install 3.12"
+            echo "  sudo apt-get update && sudo apt-get install -y git cmake ninja-build clang lld ccache"
             echo "  curl -LsSf https://astral.sh/uv/install.sh | sh"
+            echo "  # Update PATH as printed by the uv installer, e.g.:"
+            echo "  source \$HOME/.local/bin/env"
+            echo "  uv python install 3.12"
             ;;
         fedora)
-            echo "  sudo dnf install -y python3 python3-devel git cmake ninja-build clang lld ccache"
-            echo "  uv python install 3.12"
+            echo "  sudo dnf install -y git cmake ninja-build clang lld ccache"
             echo "  curl -LsSf https://astral.sh/uv/install.sh | sh"
+            echo "  # Update PATH as printed by the uv installer, e.g.:"
+            echo "  source \$HOME/.local/bin/env"
+            echo "  uv python install 3.12"
             ;;
         *)
             echo "  Install: python3 (>= 3.12), git, cmake, ninja, clang, lld, uv, ccache"
