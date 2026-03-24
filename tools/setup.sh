@@ -401,9 +401,12 @@ else
         info "Building shared LLVM (this will take a while)..."
 
         # Point cmake at the venv python so it finds pybind11/nanobind
-        # Use lld for faster link times if available
+        # Use lld on Linux (required prereq), optional on macOS
         LINKER_FLAG=""
-        if command -v ld.lld >/dev/null 2>&1; then
+        if [ "$(uname)" = "Linux" ]; then
+            LINKER_FLAG="-DLLVM_USE_LINKER=lld"
+            ok "Using lld for LLVM link (Linux)"
+        elif command -v ld.lld >/dev/null 2>&1; then
             LINKER_FLAG="-DLLVM_USE_LINKER=lld"
             ok "lld found, using for faster link times"
         elif command -v ld.mold >/dev/null 2>&1; then
@@ -411,6 +414,9 @@ else
             ok "mold found, using for faster link times"
         fi
 
+        # Only install what ASTER needs: MLIR/LLD/LLVM libraries + headers +
+        # cmake configs + tblgen + python bindings. Skip 100+ unnecessary
+        # binaries (mlir-opt, llc, opt, etc.) saving ~4 GB.
         if ! cmake -S "$LLVM_SRC" -B "$LLVM_BUILD" -GNinja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_INSTALL_PREFIX="$LLVM_INSTALL" \
@@ -422,6 +428,7 @@ else
             -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
             -DMLIR_ENABLE_EXECUTION_ENGINE=ON \
             -DMLIR_BUILD_MLIR_C_DYLIB=ON \
+            -DLLVM_INSTALL_UTILS=ON \
             -DPython_EXECUTABLE="$LLVM_VENV/bin/python" \
             -DPython3_EXECUTABLE="$LLVM_VENV/bin/python" \
             $CCACHE_FLAG \
@@ -436,23 +443,43 @@ else
             exit 1
         fi
 
-        if ! ninja -C "$LLVM_BUILD" install; then
-            err "LLVM build failed"
-            echo ""
-            echo "Check the compiler errors above."
-            echo "Build directory: $LLVM_BUILD"
-            echo ""
-            echo "To retry (without re-running cmake):"
-            echo "  ninja -C $LLVM_BUILD install"
-            exit 1
+        # Build and install only what ASTER needs:
+        # - install-mlir-headers, install-mlir-libraries: MLIR headers + static libs
+        # - install-lld-headers, install-lld-libraries: LLD headers + static libs
+        # - install-llvm-headers, install-llvm-libraries: LLVM headers + static libs
+        # - install-cmake-exports: cmake config files for find_package
+        # - install-mlir-tblgen: needed for ASTER tablegen
+        # - install-MLIR-C: MLIR C API dylib (python bindings)
+        # - install-MLIRPythonModules: MLIR python bindings
+        # This skips ~100 unnecessary binaries (mlir-opt, llc, opt, etc.)
+        # saving ~4 GB in the install directory.
+        if ! ninja -C "$LLVM_BUILD" \
+            install-mlir-headers install-mlir-libraries \
+            install-lld-headers install-lld-libraries \
+            install-llvm-headers install-llvm-libraries \
+            install-cmake-exports \
+            install-mlir-tblgen \
+            install-MLIR-C \
+            install-MLIRPythonModules install-MLIRPythonSources \
+            install-lld 2>&1; then
+            # If targeted install fails, fall back to full install
+            warn "Targeted install failed, falling back to full install..."
+            if ! ninja -C "$LLVM_BUILD" install; then
+                err "LLVM build failed"
+                echo ""
+                echo "Check the compiler errors above."
+                echo "Build directory: $LLVM_BUILD"
+                echo ""
+                echo "To retry (without re-running cmake):"
+                echo "  ninja -C $LLVM_BUILD install"
+                exit 1
+            fi
         fi
 
-        # Install test tools
-        ninja -C "$LLVM_BUILD" install FileCheck count not llvm-objdump 2>/dev/null || true
-
-        # Some systems need manual copy of test tools
+        # Install test tools (FileCheck, count, not, llvm-objdump)
         for tool in FileCheck count not llvm-objdump; do
-            if [ -f "$LLVM_BUILD/bin/$tool" ] && [ ! -f "$LLVM_INSTALL/bin/$tool" ]; then
+            if [ -f "$LLVM_BUILD/bin/$tool" ]; then
+                mkdir -p "$LLVM_INSTALL/bin"
                 cp "$LLVM_BUILD/bin/$tool" "$LLVM_INSTALL/bin/$tool"
             fi
         done
@@ -756,9 +783,12 @@ if [ "$NEED_RECONFIGURE" = false ]; then
     ok "cmake already configured (build/CMakeCache.txt exists)"
     echo "     To force reconfigure: rm $BUILD_DIR/CMakeCache.txt && re-run"
 else
-    # Use lld for faster link times if available
+    # Use lld on Linux (required prereq), optional on macOS
     ASTER_LINKER_FLAGS=""
-    if command -v ld.lld >/dev/null 2>&1; then
+    if [ "$(uname)" = "Linux" ]; then
+        ASTER_LINKER_FLAGS="-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld -DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=lld"
+        ok "Using lld for ASTER link (Linux)"
+    elif command -v ld.lld >/dev/null 2>&1; then
         ASTER_LINKER_FLAGS="-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld -DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=lld"
         ok "Using lld for ASTER link"
     elif command -v ld.mold >/dev/null 2>&1; then
