@@ -20,20 +20,26 @@ from kittens_helpers import (
     get_mlir_file,
     get_kittens_16x16_lds_library_paths,
     constexpr_substitutions_16x32,
+    shuffle_weight,
     MCPU,
     LDS_SIZE,
     WAVEFRONT_SIZE,
 )
 
-# Keyed by (a_path, load_type). a_path: "lds" or "direct". load_type: "flat" or "buffer".
+# Keyed by (b_path, load_type). b_path: "lds", "direct_b", or "direct_ab".
+# load_type: "flat" or "buffer".
 KERNEL_NAMES = {
     "lds": "gemm_f16_weak_scaled",
-    "direct": "gemm_f16_direct_a",
+    "direct_b": "gemm_f16_direct_b",
+    "direct_ab": "gemm_f16_direct_ab",
 }
 MLIR_FILES = {
     ("lds", "flat"): "test_perf_001_gemm_fp16_weak_scaled.mlir",
     ("lds", "buffer"): "test_perf_001_gemm_fp16_weak_scaled.mlir",
-    ("direct", "flat"): "test_perf_002_gemm_fp16_direct_a.mlir",
+    ("direct_b", "flat"): "test_perf_001_gemm_fp16_direct_b.mlir",
+    ("direct_b", "buffer"): "test_perf_001_gemm_fp16_direct_b.mlir",
+    ("direct_ab", "flat"): "test_perf_001_gemm_fp16_direct_ab.mlir",
+    ("direct_ab", "buffer"): "test_perf_001_gemm_fp16_direct_ab.mlir",
 }
 # Both flat and buffer use the same helpers: after PR #418 the _buf helpers were
 # unified into the flat helpers file via !aster_utils.any type-erasure.
@@ -59,10 +65,11 @@ class WeakScaleConfig:
     m_tiles_wg: int  # tiles per workgroup along M
     n_tiles_wg: int  # tiles per workgroup along N
     k_tiles: int
-    num_stages: int
+    a_stages: int
     k: int
     load_type: str = "flat"  # "flat" or "buffer"
-    a_path: str = "lds"  # "lds" or "direct" (bpermute, A bypasses LDS)
+    b_path: str = "lds"  # "lds" or "direct_b" (bpermute, B bypasses LDS)
+    b_stages: int = 0  # 0 = same as a_stages; >0 = independent B pipeline depth
     num_wg_per_cu: int = 1  # target workgroups per CU for register budget
     lcm_unroll: bool = True  # LCM-based kernel loop unrolling
     unroll_factor_multiplier: int = 1  # extra unroll on top of LCM
@@ -124,12 +131,56 @@ class WeakScaleConfig:
         return self.k // (self.k_tiles * 32)
 
     @property
+    def direct_b(self):
+        return self.b_path in ("direct_b", "direct_ab")
+
+    @property
     def direct_a(self):
-        return self.a_path == "direct"
+        return self.b_path == "direct_ab"
+
+    def _coop_2d_split(self, spatial_tiles):
+        """Split NUM_WAVES into (waves_spatial, waves_k) for 2-D cooperative loading."""
+        waves_s = min(spatial_tiles, self.num_waves)
+        waves_k = max(1, self.num_waves // waves_s)
+        coop_s = -(-spatial_tiles // waves_s)
+        coop_k = -(-self.k_tiles // waves_k)
+        return waves_s, waves_k, coop_s, coop_k
+
+    @property
+    def coop_a_split(self):
+        """(waves_m, waves_k, coop_m, coop_k) for 2-D cooperative A loading."""
+        return self._coop_2d_split(self.m_tiles_wg)
+
+    @property
+    def coop_b_split(self):
+        """(waves_n, waves_k, coop_n, coop_k) for 2-D cooperative B loading."""
+        return self._coop_2d_split(self.n_tiles_wg)
+
+    @property
+    def coop_a_mk_count(self):
+        """Total tiles per wave for A: coop_m * coop_k."""
+        _, _, coop_m, coop_k = self.coop_a_split
+        return coop_m * coop_k
+
+    @property
+    def coop_b_nk_count(self):
+        """Total tiles per wave for B: coop_n * coop_k."""
+        _, _, coop_n, coop_k = self.coop_b_split
+        return coop_n * coop_k
+
+    @property
+    def padded_m_tiles(self):
+        """LDS-padded A tile count: COOP_A * NUM_WAVES (absorbs excess waves)."""
+        return self.coop_a_count * self.num_waves
+
+    @property
+    def padded_n_tiles(self):
+        """LDS-padded B tile count: COOP_B * NUM_WAVES (absorbs excess waves)."""
+        return self.coop_b_count * self.num_waves
 
     @property
     def kernel_name(self):
-        return KERNEL_NAMES[self.a_path]
+        return KERNEL_NAMES[self.b_path]
 
     @property
     def estimated_agprs(self):
@@ -137,36 +188,52 @@ class WeakScaleConfig:
         return self.m_tiles * self.n_tiles * 4
 
     @property
+    def effective_b_stages(self):
+        """Effective B pipeline depth."""
+        return self.b_stages if self.b_stages > 0 else self.a_stages
+
+    @property
+    def pipeline_depth(self):
+        """Combined pipeline depth = max(a_stages, effective_b_stages)."""
+        return max(self.a_stages, self.effective_b_stages)
+
+    @property
     def estimated_vgprs(self):
         """Coarse VGPR estimate: pipeline buffers + overhead.
 
-        Each transfer tile is dwordx4 (4 VGPRs). Per stage we load
-        m_tiles*k_tiles A tiles and n_tiles*k_tiles B tiles per wave.
-        Add overhead for: LDS read buffers (~same as load buffers for one
-        stage), loop counters, addresses, base pointers, bpermute scratch.
-        Calibrated against actual compiler output (e.g. 242 VGPRs for
-        m_tiles=4 n_tiles=6 k_tiles=2 stages=2).
+        Each path holds (depth * tiles_per_wave * k_tiles * 4) VGPRs for
+        in-flight loads. A uses a_stages depth, B uses effective_b_stages.
+        A also needs LDS read buffers (1 stage worth).
+        direct_b adds overhead for preshuffle address computation.
         """
-        a_bufs = self.m_tiles * self.k_tiles * self.num_stages * 4
-        b_bufs = self.n_tiles * self.k_tiles * self.num_stages * 4
-        # LDS read buffers: one stage worth of tiles (direct-A skips LDS for A)
-        a_lds_read = 0 if self.direct_a else self.m_tiles * self.k_tiles * 4
-        lds_read = a_lds_read + self.n_tiles * self.k_tiles * 4
-        # Fixed overhead for addresses/loop vars.
-        # direct-A adds bpermute scratch VGPRs.
-        structural = a_bufs + b_bufs + lds_read
-        overhead = 30 if self.direct_a else 10
-        return structural + overhead
+        # A global load buffers: 2-D cooperative share, a_stages deep.
+        a_load_bufs = self.coop_a_mk_count * self.a_stages * 4
+        # A LDS read buffers: per-wave M_T tiles (consumed immediately).
+        a_lds_read = self.m_tiles * self.k_tiles * 4
+
+        if self.direct_b:
+            # B global load buffers: b_stages deep (more depth = more in flight).
+            b_load_bufs = self.n_tiles * self.k_tiles * self.effective_b_stages * 4
+            # B has no LDS read buffers, but split vx4 -> 2x vx2 per tile.
+            b_split = self.n_tiles * self.k_tiles * 4
+            overhead = 30
+        else:
+            # B through LDS: 2-D cooperative share, a_stages deep.
+            b_load_bufs = self.coop_b_nk_count * self.a_stages * 4
+            b_split = self.n_tiles * self.k_tiles * 4  # LDS read buffers
+            overhead = 10
+
+        return a_load_bufs + a_lds_read + b_load_bufs + b_split + overhead
 
     @property
     def lds_bytes(self):
-        """LDS per pipeline stage.
+        """LDS bytes.
 
-        Direct-A uses LDS only for B.
+        A uses a_stages buffers. B uses LDS only if not direct_b.
         """
-        a_tiles = 0 if self.direct_a else self.m_tiles_wg * self.k_tiles
-        b_tiles = self.n_tiles_wg * self.k_tiles
-        return self.num_stages * (a_tiles + b_tiles) * 1024
+        a_tiles = self.m_tiles_wg * self.k_tiles
+        b_tiles = 0 if self.direct_b else self.n_tiles_wg * self.k_tiles
+        return self.a_stages * (a_tiles + b_tiles) * 1024
 
     @property
     def simd_occupancy(self):
@@ -188,27 +255,36 @@ class WeakScaleConfig:
         return (
             f"m{self.m_dim}xn{self.n_dim}xk{self.k}"
             f"_wg{self.m_wg}x{self.n_wg}_w{self.m_waves}x{self.n_waves}"
-            f"{tile_str}_s{self.num_stages}{lcm}{um}{peel}{self._label_suffix}"
+            f"{tile_str}_s{self.a_stages}"
+            f"{f'_bs{self.b_stages}' if self.b_stages > 0 else ''}"
+            f"{lcm}{um}{peel}{self._label_suffix}"
         )
 
 
-def _load_k_loop_helpers(load_type="flat", a_path="lds"):
+def _load_k_loop_helpers(load_type="flat", b_path="lds"):
     """Read the shared K-loop helper functions MLIR fragment."""
     helpers_path = get_mlir_file(K_LOOP_HELPERS_FILES[load_type])
     with open(helpers_path) as f:
         helpers = f.read()
-    if a_path == "direct":
-        direct_path = get_mlir_file("gemm_16x32_f16_k_loop_helpers_direct_a.mlir")
-        with open(direct_path) as f:
+    if b_path == "direct_b":
+        direct_b_path = get_mlir_file("gemm_16x32_f16_k_loop_helpers_direct_b.mlir")
+        with open(direct_b_path) as f:
+            helpers += "\n" + f.read()
+    elif b_path == "direct_ab":
+        direct_ab_path = get_mlir_file("gemm_16x32_f16_k_loop_helpers_direct_ab.mlir")
+        with open(direct_ab_path) as f:
             helpers += "\n" + f.read()
     return helpers
 
 
 def _make_substitutions(cfg):
     """Build template substitutions dict for a WeakScaleConfig."""
-    subs = {"{{K_LOOP_HELPERS}}": _load_k_loop_helpers(cfg.load_type, cfg.a_path)}
+    subs = {"{{K_LOOP_HELPERS}}": _load_k_loop_helpers(cfg.load_type, cfg.b_path)}
+    effective_b_stages = cfg.b_stages if cfg.b_stages > 0 else None
     subs.update(
-        constexpr_substitutions_16x32(cfg.m_tiles, cfg.n_tiles, cfg.k, cfg.num_stages)
+        constexpr_substitutions_16x32(
+            cfg.m_tiles, cfg.n_tiles, cfg.k, cfg.a_stages, b_stages=effective_b_stages
+        )
     )
     subs["{{M_WG}}"] = str(cfg.m_wg)
     subs["{{N_WG}}"] = str(cfg.n_wg)
@@ -225,6 +301,28 @@ def _make_substitutions(cfg):
     subs["{{K_T}}"] = str(cfg.k_tiles)
     subs["{{A_TILES_PER_SLICE}}"] = str(cfg.m_tiles_wg)
     subs["{{B_TILES_PER_SLICE}}"] = str(cfg.n_tiles_wg)
+    subs["{{NUM_WAVES}}"] = str(cfg.num_waves)
+    # 2-D cooperative split: (waves_m, waves_k) for A, (waves_n, waves_k) for B
+    a_wm, a_wk, a_cm, a_ck = cfg.coop_a_split
+    b_wn, b_wk, b_cn, b_ck = cfg.coop_b_split
+    subs["{{COOP_A_WAVES_M}}"] = str(a_wm)
+    subs["{{COOP_A_WAVES_K}}"] = str(a_wk)
+    subs["{{COOP_A_M}}"] = str(a_cm)
+    subs["{{COOP_A_K}}"] = str(a_ck)
+    subs["{{MAX_COOP_A_M_START}}"] = str(max(0, cfg.m_tiles_wg - a_cm))
+    subs["{{MAX_COOP_A_K_START}}"] = str(max(0, cfg.k_tiles - a_ck))
+    subs["{{COOP_B_WAVES_N}}"] = str(b_wn)
+    subs["{{COOP_B_WAVES_K}}"] = str(b_wk)
+    subs["{{COOP_B_N}}"] = str(b_cn)
+    subs["{{COOP_B_K}}"] = str(b_ck)
+    subs["{{MAX_COOP_B_N_START}}"] = str(max(0, cfg.n_tiles_wg - b_cn))
+    subs["{{MAX_COOP_B_K_START}}"] = str(max(0, cfg.k_tiles - b_ck))
+    # Preshuffle layout parameters (f16: BK=32, 64 lanes, 16 bytes/lane).
+    subs["{{STRIDE_N0_BYTES}}"] = str((cfg.k // 32) * 1024)
+    subs["{{STRIDE_M0_BYTES}}"] = str((cfg.k // 32) * 1024)  # same formula as N
+    subs["{{N_BLOCKS}}"] = str(cfg.n_dim // 16)
+    subs["{{M_BLOCKS}}"] = str(cfg.m_dim // 16)
+    subs["{{K_BLOCKS}}"] = str(cfg.k // 32)
     return subs
 
 
@@ -240,7 +338,7 @@ def compile_gemm(
 ):
     """Compile a GEMM config to HSACO.
 
-    Returns (hsaco_path, asm_str). Handles a_path (lds/direct) and load_type
+    Returns (hsaco_path, asm_str). Handles b_path (lds/direct) and load_type
     (flat/buffer) via cfg fields.
     """
     from aster import ir
@@ -253,11 +351,9 @@ def compile_gemm(
             content = content.replace(pattern, replacement)
         return content
 
-    mlir_key = (cfg.a_path, cfg.load_type)
+    mlir_key = (cfg.b_path, cfg.load_type)
     mlir_file = MLIR_FILES[mlir_key]
-    lib_paths = get_kittens_16x16_lds_library_paths(
-        use_buffer=cfg.use_buffer, direct_a=cfg.direct_a
-    )
+    lib_paths = get_kittens_16x16_lds_library_paths(use_buffer=cfg.use_buffer)
 
     lcm_unroll = getattr(cfg, "lcm_unroll", True)
     pipeline = make_default_pass_pipeline(
@@ -302,9 +398,9 @@ def execute_gemm_hsaco(cfg, hsaco_path, num_iterations, A, B, skip_gpu_check=Fal
 
     Returns (C_output, times_ns).
 
-    Uses aster.hip (MLIR/LLVM-free) for rocprofv3 compatibility. Set skip_gpu_check=True
-    when running under rocprofv3 (rocminfo hangs because rocprofv3 intercepts child
-    processes).
+    Automatically preshuffles B when cfg.direct_b is True. Callers pass the original
+    row-major B -- the preshuffle is applied here so there is a single code path for
+    both test and bench.
 
     Skips (pytest.skip) if target GPU unavailable.
     """
@@ -314,14 +410,18 @@ def execute_gemm_hsaco(cfg, hsaco_path, num_iterations, A, B, skip_gpu_check=Fal
     if not skip_gpu_check and not system_has_gpu(MCPU):
         pytest.skip(f"GPU {MCPU} not available, skip execution")
 
+    # Preshuffle B for direct_b (single point of truth).
+    A_gpu = shuffle_weight(A) if cfg.direct_a else A
+    B_gpu = shuffle_weight(B) if cfg.direct_b else B
+
     C_output = np.zeros(cfg.m_dim * cfg.n_dim, dtype=np.float32)
 
     times_ns = execute_hsaco(
         hsaco_path=hsaco_path,
         kernel_name=cfg.kernel_name,
         arguments=[
-            InputArray(A.flatten()),
-            InputArray(B.flatten()),
+            InputArray(A_gpu.flatten()),
+            InputArray(B_gpu.flatten()),
             OutputArray(C_output),
         ],
         grid_dim=(cfg.num_workgroups, 1, 1),
@@ -340,27 +440,31 @@ class TestWeakScaleCorrectness:
     @pytest.mark.parametrize(
         "m_wg,n_wg,m_tiles_wg,n_tiles_wg,m_waves,n_waves",
         [
-            # 2048x2048: 32 WG x 4 tiles/WG x 16 = 2048
+            # Divisible: M_TILES_WG % NUM_WAVES == 0
             (32, 32, 4, 4, 2, 2),  # 2x2 waves, 2x2 tiles/wave
-            (32, 32, 4, 4, 4, 4),  # 4x4 waves, 1x1 tiles/wave
-            (16, 16, 8, 8, 4, 4),  # 4x4 waves, 2x2 tiles/wave
             (16, 16, 8, 8, 2, 2),  # 2x2 waves, 4x4 tiles/wave
-            # 2048x4096: rectangular
             (32, 64, 4, 4, 2, 2),
-            (32, 64, 4, 4, 4, 4),
+            # OOB: M_TILES_WG % NUM_WAVES != 0 (excess waves load tile-0 region)
+            (64, 64, 2, 2, 2, 2),  # 4 waves, 2 tiles -> coop_a=1, 2 waves OOB
+            (32, 32, 6, 4, 2, 2),  # 4 waves, 6 A-tiles -> coop_a=2, wave3 OOB
+            (32, 32, 4, 6, 2, 2),  # 4 waves, 6 B-tiles -> coop_b=2, wave3 OOB
+            (32, 32, 6, 6, 2, 2),  # 4 waves, 6x6 -> both OOB
+            (32, 64, 4, 4, 2, 4),  # 8 waves, 4 tiles -> coop=1, 4 waves OOB
         ],
         ids=[
-            "2kx2k_wg32_twg4_w2x2",
-            "2kx2k_wg32_twg4_w4x4",
-            "2kx2k_wg16_twg8_w4x4",
-            "2kx2k_wg16_twg8_w2x2",
-            "2kx4k_wg32x64_twg4_w2x2",
-            "2kx4k_wg32x64_twg4_w4x4",
+            "div_2kx2k_twg4_w2x2",
+            "div_2kx2k_twg8_w2x2",
+            "div_2kx4k_twg4_w2x2",
+            "oob_2kx2k_twg2_w2x2",
+            "oob_6x4_twg6x4_w2x2",
+            "oob_4x6_twg4x6_w2x2",
+            "oob_6x6_twg6x6_w2x2",
+            "oob_2kx4k_twg4_w2x4",
         ],
     )
-    @pytest.mark.parametrize("num_stages", [2, 3], ids=["2stage", "3stage"])
+    @pytest.mark.parametrize("a_stages", [2, 3], ids=["2stage", "3stage"])
     @pytest.mark.parametrize("load_type", ["flat", "buffer"], ids=["flat", "buffer"])
-    @pytest.mark.parametrize("a_path", ["lds", "direct"], ids=["lds", "direct"])
+    @pytest.mark.parametrize("b_path", ["lds", "direct_b"], ids=["lds", "direct_b"])
     def test_correctness(
         self,
         m_wg,
@@ -369,13 +473,13 @@ class TestWeakScaleCorrectness:
         n_tiles_wg,
         m_waves,
         n_waves,
-        num_stages,
+        a_stages,
         load_type,
-        a_path,
+        b_path,
     ):
         """Constexpr GEMM verified against numpy."""
-        if (a_path, load_type) not in MLIR_FILES:
-            pytest.skip(f"({a_path}, {load_type}) not yet implemented")
+        if (b_path, load_type) not in MLIR_FILES:
+            pytest.skip(f"({b_path}, {load_type}) not yet implemented")
         k = 128
         k_tiles = 1
         cfg = WeakScaleConfig(
@@ -386,10 +490,10 @@ class TestWeakScaleCorrectness:
             m_tiles_wg,
             n_tiles_wg,
             k_tiles,
-            num_stages,
+            a_stages,
             k,
             load_type=load_type,
-            a_path=a_path,
+            b_path=b_path,
         )
         # Per-wave tile product > 16 requires too many registers.
         if cfg.m_tiles * cfg.n_tiles > 16:
@@ -497,7 +601,7 @@ if __name__ == "__main__":
     )
     a = parser.parse_args()
     load_type = "buffer" if a.use_buffer else "flat"
-    a_path = "direct" if a.direct_a else "lds"
+    b_path = "direct_b" if a.direct_b else "lds"
     k = a.k_scaling_factor * a.k_tiles * 32
 
     cfg = WeakScaleConfig(
@@ -511,12 +615,12 @@ if __name__ == "__main__":
         a.stages,
         k,
         load_type=load_type,
-        a_path=a_path,
+        b_path=b_path,
     )
 
     from aster.compiler.metadata import parse_asm_kernel_resources
 
-    a_mode = f" direct-A" if cfg.direct_a else ""
+    a_mode = " direct-B" if cfg.direct_b else ""
 
     print(f"Config: {cfg.label} ({cfg.load_type}{a_mode})")
     print(f"  M={cfg.m_dim}, N={cfg.n_dim}, K={cfg.k}")
