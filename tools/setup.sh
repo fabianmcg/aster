@@ -270,7 +270,7 @@ phase2_check_installed_llvm() {
     LLVM_OK=false
     VCS_HEADER="$LLVM_INSTALL/include/llvm/Support/VCSRevision.h"
     if [ -f "$VCS_HEADER" ]; then
-        INSTALLED_COMMIT=$(grep 'LLVM_REVISION' "$VCS_HEADER" | sed 's/.*"\([0-9a-f]*\)".*/\1/')
+        INSTALLED_COMMIT=$(grep -o '[0-9a-f]\{40\}' "$VCS_HEADER" | head -1)
         if [ "$INSTALLED_COMMIT" = "$EXPECTED_COMMIT" ]; then
             ok "Shared LLVM at $LLVM_INSTALL matches expected commit"
             LLVM_OK=true
@@ -324,12 +324,14 @@ phase2_build_shared_llvm_if_needed() {
     fi
 
     LLVM_LINKER_FLAGS=""
-    if command -v "$LLD_CMD" >/dev/null 2>&1; then
-        LLVM_LINKER_FLAGS="-DLLVM_USE_LINKER=${LLD_CMD}"
-        ok "${LLD_CMD} found, using for faster link times"
-    elif command -v ld.mold >/dev/null 2>&1; then
-        LLVM_LINKER_FLAGS="-DLLVM_USE_LINKER=mold"
-        ok "mold found, using for faster link times"
+    if [ "$(uname)" = "Linux" ]; then
+        if command -v "$LLD_CMD" >/dev/null 2>&1; then
+            LLVM_LINKER_FLAGS="-DLLVM_USE_LINKER=${LLD_CMD}"
+            ok "${LLD_CMD} found, using for faster link times"
+        elif command -v ld.mold >/dev/null 2>&1; then
+            LLVM_LINKER_FLAGS="-DLLVM_USE_LINKER=mold"
+            ok "mold found, using for faster link times"
+        fi
     fi
 
     export CC="$CLANG_CMD"
@@ -539,9 +541,17 @@ phase3_maybe_setup_rocm() {
 
 phase3_update_activate_script() {
     ACTIVATE="$VIRTUAL_ENV/bin/activate"
-    if grep -q "ASTER setup (added by tools/setup.sh)" "$ACTIVATE" 2>/dev/null; then
+    # Regenerate if the block is missing or doesn't include python_packages.
+    if grep -q "python_packages" "$ACTIVATE" 2>/dev/null; then
         ok "activate script already configured"
         return
+    fi
+
+    # Strip any previous ASTER block before rewriting.
+    if grep -q "ASTER setup (added by tools/setup.sh)" "$ACTIVATE" 2>/dev/null; then
+        TMP=$(mktemp)
+        sed '/# --- ASTER setup/,/# --- end ASTER setup ---/d' "$ACTIVATE" > "$TMP"
+        mv "$TMP" "$ACTIVATE"
     fi
 
     echo "  Adding environment variables to activate script..."
@@ -556,7 +566,7 @@ ACTIVATE_EOF
     cat >> "$ACTIVATE" << 'ACTIVATE_EOF'
 export VENV_PURELIB=$(python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])")
 export PATH=${LLVM_INSTALL}/bin:${VIRTUAL_ENV}/bin:${VENV_PURELIB}/_rocm_sdk_devel/bin:${PATH}
-export PYTHONPATH=${VENV_PURELIB}:${PYTHONPATH}
+export PYTHONPATH=${VIRTUAL_ENV}/python_packages:${VENV_PURELIB}:${PYTHONPATH}
 export LD_LIBRARY_PATH=${VENV_PURELIB}/_rocm_sdk_devel/lib:${LD_LIBRARY_PATH}
 export CMAKE_PREFIX_PATH=${LLVM_INSTALL}:${CMAKE_PREFIX_PATH}
 # --- end ASTER setup ---
@@ -565,73 +575,6 @@ ACTIVATE_EOF
     ok "activate script updated"
 }
 
-phase3_generate_sandbox_activate() {
-    local sandbox_dir="$ASTER_DIR/sandbox"
-    local sandbox_activate="$sandbox_dir/activate.sh"
-    local sandbox_deactivate="$sandbox_dir/deactivate.sh"
-    mkdir -p "$sandbox_dir"
-
-    cat > "$sandbox_activate" << SANDBOX_EOF
-#!/usr/bin/env bash
-#
-# sandbox/activate.sh - Activate the ASTER venv with sandbox Python paths.
-#
-# Usage:
-#   source sandbox/activate.sh
-#
-# To undo:
-#   source sandbox/deactivate.sh
-
-if [ -n "\${ASTER_SANDBOX_ACTIVE:-}" ]; then
-    echo "sandbox already active (source sandbox/deactivate.sh first)" >&2
-    return 0
-fi
-
-# shellcheck source=/dev/null
-source "${VIRTUAL_ENV}/bin/activate"
-
-# Save current PYTHONPATH and PATH so deactivate.sh can restore them exactly.
-export _ASTER_OLD_PYTHONPATH="\${PYTHONPATH:-}"
-export _ASTER_OLD_PATH="\${PATH:-}"
-
-# Prepend build-tree and install-tree package directories.
-export PYTHONPATH="${ASTER_BUILD_DIR}/python_packages\${PYTHONPATH:+:\${PYTHONPATH}}"
-export PATH="${ASTER_BUILD_DIR}/bin\${PATH:+:\${PATH}}"
-
-export ASTER_SANDBOX_ACTIVE=1
-SANDBOX_EOF
-
-    cat > "$sandbox_deactivate" << SANDBOX_EOF
-#!/usr/bin/env bash
-#
-# sandbox/deactivate.sh - Undo sandbox/activate.sh.
-#
-# Restores PYTHONPATH to its pre-activation state and deactivates the venv.
-#
-# Usage:
-#   source sandbox/deactivate.sh
-
-if [ -z "\${ASTER_SANDBOX_ACTIVE:-}" ]; then
-    echo "sandbox is not active" >&2
-    return 0
-fi
-
-if [ -n "\${_ASTER_OLD_PYTHONPATH}" ]; then
-    export PYTHONPATH="\${_ASTER_OLD_PYTHONPATH}"
-else
-    unset PYTHONPATH
-fi
-if [ -n "\${_ASTER_OLD_PATH}" ]; then
-    export PATH="\${_ASTER_OLD_PATH}"
-else
-    unset PATH
-fi
-unset _ASTER_OLD_PYTHONPATH _ASTER_OLD_PATH ASTER_SANDBOX_ACTIVE
-deactivate 2>/dev/null || true
-SANDBOX_EOF
-
-    ok "sandbox/activate.sh and sandbox/deactivate.sh generated"
-}
 
 phase3_python_venv() {
     info "Phase 3: Python virtual environment"
@@ -640,7 +583,6 @@ phase3_python_venv() {
     phase3_install_requirements
     phase3_maybe_setup_rocm
     phase3_update_activate_script
-    phase3_generate_sandbox_activate
     echo ""
 }
 
@@ -685,12 +627,14 @@ phase4_needs_reconfigure() {
 
 phase4_select_linker() {
     ASTER_LINKER_FLAGS=""
-    if command -v "$LLD_CMD" >/dev/null 2>&1; then
-        ASTER_LINKER_FLAGS="-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=${LLD_CMD} -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=${LLD_CMD} -DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=${LLD_CMD}"
-        ok "Using ${LLD_CMD} for ASTER link"
-    elif command -v ld.mold >/dev/null 2>&1; then
-        ASTER_LINKER_FLAGS="-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=mold -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=mold -DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=mold"
-        ok "Using mold for ASTER link"
+    if [ "$(uname)" = "Linux" ]; then
+        if command -v "$LLD_CMD" >/dev/null 2>&1; then
+            ASTER_LINKER_FLAGS="-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=${LLD_CMD} -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=${LLD_CMD} -DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=${LLD_CMD}"
+            ok "Using ${LLD_CMD} for ASTER link"
+        elif command -v ld.mold >/dev/null 2>&1; then
+            ASTER_LINKER_FLAGS="-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=mold -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=mold -DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=mold"
+            ok "Using mold for ASTER link"
+        fi
     fi
 }
 
@@ -743,7 +687,7 @@ phase4_cmake_configure() {
 phase5_build() {
     info "Phase 5: Build"
     echo "  Running ninja install..."
-    if "$VIRTUAL_ENV/bin/ninja" -C "$ASTER_BUILD_DIR"; then
+    if "$VIRTUAL_ENV/bin/ninja" -C "$ASTER_BUILD_DIR" install; then
         ok "ASTER built"
     else
         err "Build failed"
@@ -759,7 +703,7 @@ print_summary() {
     echo "  venv:    $VIRTUAL_ENV"
     echo "  build:   $ASTER_BUILD_DIR"
     echo ""
-    echo "  Activate the venv:  source $ASTER_DIR/sandbox/activate.sh"
+    echo "  Activate the venv:  source $VIRTUAL_ENV/bin/activate"
     echo "  Run lit tests:      $VIRTUAL_ENV/bin/lit $ASTER_BUILD_DIR/test -v"
     echo "  Run pytests:        cd $ASTER_DIR && $VIRTUAL_ENV/bin/pytest -n 16 ./test ./mlir_kernels ./contrib ./python"
     echo "  Rebuild:            ninja -C $ASTER_BUILD_DIR install"
