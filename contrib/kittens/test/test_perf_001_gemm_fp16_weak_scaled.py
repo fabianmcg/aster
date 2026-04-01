@@ -4,17 +4,24 @@ Verifies multi-WG, multi-wave, multi-tile GEMM at K=128 against numpy reference.
 Uses v_mfma_f32_16x16x16_f16: 16x16 output tiles, K=16 per MFMA.
 Global loads use dwordx4 (16x32 transfer tiles): 2x bandwidth vs dwordx2.
 
-Tiles are specified per-workgroup (m_tiles_wg, n_tiles_wg). Per-wave tile counts
-are derived: m_tiles = m_tiles_wg // m_waves.
+Tiles are specified per-workgroup (num_tiles_per_wg). Per-wave tile counts
+are derived: num_tiles_per_wave = num_tiles_per_wg / num_waves_per_wg.
 """
 
 from dataclasses import dataclass
 
 import numpy as np
 from kittens.gemm_config import (
+    A as OP_A,
+    B as OP_B,
+    C as OP_C,
+    DIM_M,
+    DIM_N,
+    DIM_K,
     GemmSpec,
     GemmMappingSpec,
     LoadType,
+    Operand,
     OperandPath,
     WeakScaledMappedGemmInstance,
 )
@@ -59,13 +66,9 @@ _A_STAGES_TO_STRATEGY = {1: 0, 2: 1, 3: 3, 4: 5, 5: 7, 6: 9}
 
 
 def _make_weak_scaled_mapped_gemm_instance(
-    m_wg,
-    n_wg,
-    m_waves,
-    n_waves,
-    m_tiles_wg,
-    n_tiles_wg,
-    k_tiles,
+    num_workgroups_per_kernel,
+    num_waves_per_wg,
+    num_tiles_per_wg,
     *,
     k,
     a_stages=2,
@@ -73,24 +76,25 @@ def _make_weak_scaled_mapped_gemm_instance(
     load_type="flat",
     b_path="lds",
     num_wg_per_cu=1,
-    mfma_m=16,
-    mfma_n=16,
+    mfma_shape=None,
     **mapping_kwargs,
 ):
-    """Helper to build a WeakScaledMappedGemmInstance from scalar weak-scale parameters."""
+    """Helper to build a WeakScaledMappedGemmInstance from list weak-scale parameters."""
+    if mfma_shape is None:
+        mfma_shape = [16, 16, 16]
     if pipeline_strategy < 0:
         pipeline_strategy = _A_STAGES_TO_STRATEGY[a_stages]
-    M = m_wg * m_tiles_wg * mfma_m
-    N = n_wg * n_tiles_wg * mfma_n
-    spec = GemmSpec.from_sizes(M, N, k)
+    M = num_workgroups_per_kernel[DIM_M] * num_tiles_per_wg[DIM_M] * mfma_shape[DIM_M]
+    N = num_workgroups_per_kernel[DIM_N] * num_tiles_per_wg[DIM_N] * mfma_shape[DIM_N]
+    spec = GemmSpec.from_sizes(M, N, k, mfma_shape=mfma_shape)
     mapping = GemmMappingSpec(
-        m_wg=m_wg,
-        n_wg=n_wg,
-        m_waves=m_waves,
-        n_waves=n_waves,
-        m_tiles_per_wave=m_tiles_wg // m_waves,
-        n_tiles_per_wave=n_tiles_wg // n_waves,
-        k_tiles=k_tiles,
+        num_workgroups_per_kernel=list(num_workgroups_per_kernel),
+        num_waves_per_workgroup=list(num_waves_per_wg),
+        num_tiles_per_wave=[
+            num_tiles_per_wg[DIM_M] // num_waves_per_wg[DIM_M],
+            num_tiles_per_wg[DIM_N] // num_waves_per_wg[DIM_N],
+            num_tiles_per_wg[DIM_K] // num_waves_per_wg[DIM_K],
+        ],
         pipeline_strategy=pipeline_strategy,
         load_type=LoadType(load_type),
         operand_path=OperandPath(b_path),
@@ -121,24 +125,36 @@ def _make_substitutions(cfg):
     subs = {"{{K_LOOP_HELPERS}}": _load_k_loop_helpers(cfg.load_type, cfg.b_path)}
     subs.update(
         constexpr_substitutions_16x32(
-            cfg.m_tiles, cfg.n_tiles, cfg.k, cfg.pipeline_strategy
+            cfg.mapping.num_tiles_per_wave[DIM_M],
+            cfg.mapping.num_tiles_per_wave[DIM_N],
+            cfg.gemm_size[DIM_K],
+            cfg.pipeline_strategy,
         )
     )
-    subs["{{M_WG}}"] = str(cfg.m_wg)
-    subs["{{N_WG}}"] = str(cfg.n_wg)
-    subs["{{M_WAVES}}"] = str(cfg.m_waves)
-    subs["{{N_WAVES}}"] = str(cfg.n_waves)
-    subs["{{M_TILES_WG}}"] = str(cfg.m_tiles_wg)
-    subs["{{N_TILES_WG}}"] = str(cfg.n_tiles_wg)
-    subs["{{A_LDS_BYTES}}"] = str(cfg.m_tiles_wg * cfg.k_tiles * 1024)
-    subs["{{B_LDS_BYTES}}"] = str(cfg.n_tiles_wg * cfg.k_tiles * 1024)
-    subs["{{STRIDE_C}}"] = str(cfg.n_dim * 4)  # f32 = 4 bytes
+    subs["{{M_WG}}"] = str(cfg.mapping.num_workgroups_per_kernel[DIM_M])
+    subs["{{N_WG}}"] = str(cfg.mapping.num_workgroups_per_kernel[DIM_N])
+    subs["{{M_WAVES}}"] = str(cfg.mapping.num_waves_per_workgroup[DIM_M])
+    subs["{{N_WAVES}}"] = str(cfg.mapping.num_waves_per_workgroup[DIM_N])
+    subs["{{M_TILES_WG}}"] = str(cfg.mapping.num_tiles_per_workgroup[DIM_M])
+    subs["{{N_TILES_WG}}"] = str(cfg.mapping.num_tiles_per_workgroup[DIM_N])
+    subs["{{A_LDS_BYTES}}"] = str(
+        cfg.mapping.num_tiles_per_workgroup[DIM_M]
+        * cfg.mapping.num_tiles_per_wave[DIM_K]
+        * 1024
+    )
+    subs["{{B_LDS_BYTES}}"] = str(
+        cfg.mapping.num_tiles_per_wave[DIM_K]
+        * cfg.mapping.num_tiles_per_workgroup[DIM_N]
+        * 1024
+    )
+    gs = cfg.gemm_size
+    subs["{{STRIDE_C}}"] = str(gs[DIM_N] * 4)  # f32 = 4 bytes
     subs["{{SHARED_MEM}}"] = "0"
     subs["{{NUM_THREADS}}"] = str(cfg.num_threads)
     subs["{{NUM_BLOCKS}}"] = str(cfg.num_workgroups)
-    subs["{{K_T}}"] = str(cfg.k_tiles)
-    subs["{{A_TILES_PER_SLICE}}"] = str(cfg.m_tiles_wg)
-    subs["{{B_TILES_PER_SLICE}}"] = str(cfg.n_tiles_wg)
+    subs["{{K_T}}"] = str(cfg.mapping.num_tiles_per_wave[DIM_K])
+    subs["{{A_TILES_PER_SLICE}}"] = str(cfg.mapping.num_tiles_per_workgroup[DIM_M])
+    subs["{{B_TILES_PER_SLICE}}"] = str(cfg.mapping.num_tiles_per_workgroup[DIM_N])
     subs["{{NUM_WAVES}}"] = str(cfg.num_waves)
     # 2-D cooperative split: (waves_m, waves_k) for A, (waves_n, waves_k) for B
     a_wm, a_wk, a_cm, a_ck = cfg.coop_a_split
@@ -147,20 +163,28 @@ def _make_substitutions(cfg):
     subs["{{COOP_A_WAVES_K}}"] = str(a_wk)
     subs["{{COOP_A_M}}"] = str(a_cm)
     subs["{{COOP_A_K}}"] = str(a_ck)
-    subs["{{MAX_COOP_A_M_START}}"] = str(max(0, cfg.m_tiles_wg - a_cm))
-    subs["{{MAX_COOP_A_K_START}}"] = str(max(0, cfg.k_tiles - a_ck))
+    subs["{{MAX_COOP_A_M_START}}"] = str(
+        max(0, cfg.mapping.num_tiles_per_workgroup[DIM_M] - a_cm)
+    )
+    subs["{{MAX_COOP_A_K_START}}"] = str(
+        max(0, cfg.mapping.num_tiles_per_wave[DIM_K] - a_ck)
+    )
     subs["{{COOP_B_WAVES_N}}"] = str(b_wn)
     subs["{{COOP_B_WAVES_K}}"] = str(b_wk)
     subs["{{COOP_B_N}}"] = str(b_cn)
     subs["{{COOP_B_K}}"] = str(b_ck)
-    subs["{{MAX_COOP_B_N_START}}"] = str(max(0, cfg.n_tiles_wg - b_cn))
-    subs["{{MAX_COOP_B_K_START}}"] = str(max(0, cfg.k_tiles - b_ck))
+    subs["{{MAX_COOP_B_N_START}}"] = str(
+        max(0, cfg.mapping.num_tiles_per_workgroup[DIM_N] - b_cn)
+    )
+    subs["{{MAX_COOP_B_K_START}}"] = str(
+        max(0, cfg.mapping.num_tiles_per_wave[DIM_K] - b_ck)
+    )
     # Preshuffle layout parameters (f16: BK=32, 64 lanes, 16 bytes/lane).
-    subs["{{STRIDE_N0_BYTES}}"] = str((cfg.k // 32) * 1024)
-    subs["{{STRIDE_M0_BYTES}}"] = str((cfg.k // 32) * 1024)  # same formula as N
-    subs["{{N_BLOCKS}}"] = str(cfg.n_dim // 16)
-    subs["{{M_BLOCKS}}"] = str(cfg.m_dim // 16)
-    subs["{{K_BLOCKS}}"] = str(cfg.k // 32)
+    subs["{{STRIDE_N0_BYTES}}"] = str((gs[DIM_K] // 32) * 1024)
+    subs["{{STRIDE_M0_BYTES}}"] = str((gs[DIM_K] // 32) * 1024)  # same formula as N
+    subs["{{N_BLOCKS}}"] = str(gs[DIM_N] // 16)
+    subs["{{M_BLOCKS}}"] = str(gs[DIM_M] // 16)
+    subs["{{K_BLOCKS}}"] = str(gs[DIM_K] // 32)
     return subs
 
 
@@ -251,7 +275,9 @@ def execute_gemm_hsaco(cfg, hsaco_path, num_iterations, A, B, skip_gpu_check=Fal
     A_gpu = shuffle_weight(A) if cfg.direct_a else A
     B_gpu = shuffle_weight(B) if cfg.direct_b else B
 
-    C_output = np.zeros(cfg.m_dim * cfg.n_dim, dtype=np.float32)
+    import math
+
+    C_output = np.zeros(math.prod(cfg.spec.operand_shape(OP_C)), dtype=np.float32)
 
     times_ns = execute_hsaco(
         hsaco_path=hsaco_path,
@@ -272,21 +298,26 @@ class TestWeakScaleCorrectness:
     """Correctness gate: must pass before perf sweep runs."""
 
     # Problem sizes > 4000 in each dimension.
-    # M = m_wg * m_tiles_wg * 16, N = n_wg * n_tiles_wg * 16.
-    # n_wg must be power of 2 (delinearize from 1-D block ID).
+    # M = num_workgroups_per_kernel[M] * num_tiles_per_wg[M] * 16 (similarly N).
+    # num_workgroups_per_kernel[N] must be power of 2 (delinearize from 1-D block ID).
     @pytest.mark.parametrize(
-        "m_wg,n_wg,m_tiles_wg,n_tiles_wg,m_waves,n_waves",
+        "num_workgroups_per_kernel,num_waves_per_wg,num_tiles_per_wg",
         [
-            # Divisible: M_TILES_WG % NUM_WAVES == 0
-            (32, 32, 4, 4, 2, 2),  # 2x2 waves, 2x2 tiles/wave
-            (16, 16, 8, 8, 2, 2),  # 2x2 waves, 4x4 tiles/wave
-            (32, 64, 4, 4, 2, 2),
-            # OOB: M_TILES_WG % NUM_WAVES != 0 (excess waves load tile-0 region)
-            (64, 64, 2, 2, 2, 2),  # 4 waves, 2 tiles -> coop_a=1, 2 waves OOB
-            (32, 32, 6, 4, 2, 2),  # 4 waves, 6 A-tiles -> coop_a=2, wave3 OOB
-            (32, 32, 4, 6, 2, 2),  # 4 waves, 6 B-tiles -> coop_b=2, wave3 OOB
-            (32, 32, 6, 6, 2, 2),  # 4 waves, 6x6 -> both OOB
-            (32, 64, 4, 4, 2, 4),  # 8 waves, 4 tiles -> coop=1, 4 waves OOB
+            # Divisible: tiles_per_wg % num_waves == 0
+            ([32, 32, 1], [2, 2, 1], [4, 4, 1]),  # 2x2 waves, 2x2 tiles/wave
+            ([16, 16, 1], [2, 2, 1], [8, 8, 1]),  # 2x2 waves, 4x4 tiles/wave
+            ([32, 64, 1], [2, 2, 1], [4, 4, 1]),
+            # OOB: tiles_per_wg % num_waves != 0 (excess waves load tile-0 region)
+            # 4 waves, 2 tiles -> coop_a=1, 2 waves OOB
+            ([64, 64, 1], [2, 2, 1], [2, 2, 1]),
+            # 4 waves, 6 A-tiles -> coop_a=2, wave3 OOB
+            ([32, 32, 1], [2, 2, 1], [6, 4, 1]),
+            # 4 waves, 6 B-tiles -> coop_b=2, wave3 OOB
+            ([32, 32, 1], [2, 2, 1], [4, 6, 1]),
+            # 4 waves, 6x6 -> both OOB
+            ([32, 32, 1], [2, 2, 1], [6, 6, 1]),
+            # 8 waves, 4 tiles -> coop=1, 4 waves OOB
+            ([32, 64, 1], [2, 4, 1], [4, 4, 1]),
         ],
         ids=[
             "div_2kx2k_twg4_w2x2",
@@ -304,12 +335,9 @@ class TestWeakScaleCorrectness:
     @pytest.mark.parametrize("b_path", ["lds", "direct_b"], ids=["lds", "direct_b"])
     def test_correctness(
         self,
-        m_wg,
-        n_wg,
-        m_tiles_wg,
-        n_tiles_wg,
-        m_waves,
-        n_waves,
+        num_workgroups_per_kernel,
+        num_waves_per_wg,
+        num_tiles_per_wg,
         a_stages,
         load_type,
         b_path,
@@ -317,32 +345,27 @@ class TestWeakScaleCorrectness:
         """Constexpr GEMM verified against numpy."""
         if (b_path, load_type) not in MLIR_FILES:
             pytest.skip(f"({b_path}, {load_type}) not yet implemented")
-        k = 128
-        k_tiles = 1
         cfg = _make_weak_scaled_mapped_gemm_instance(
-            m_wg,
-            n_wg,
-            m_waves,
-            n_waves,
-            m_tiles_wg,
-            n_tiles_wg,
-            k_tiles,
-            k=k,
+            num_workgroups_per_kernel,
+            num_waves_per_wg,
+            num_tiles_per_wg,
+            k=128,
             a_stages=a_stages,
             load_type=load_type,
             b_path=b_path,
         )
         # Per-wave tile product > 16 requires too many registers.
-        if cfg.m_tiles * cfg.n_tiles > 16:
+        tpw = cfg.mapping.num_tiles_per_wave
+        if tpw[DIM_M] * tpw[DIM_N] > 16:
             pytest.skip(
-                f"per-wave tiles {cfg.m_tiles}x{cfg.n_tiles} product > 16 for {cfg.label}"
+                f"per-wave tiles {tpw[DIM_M]}x{tpw[DIM_N]} product > 16 for {cfg.label}"
             )
         # Avoid unfeasible LDS sizes
         if cfg.lds_bytes >= LDS_SIZE:
             pytest.skip(f"LDS {cfg.lds_bytes} >= {LDS_SIZE}")
         np.random.seed(42)
-        A = (np.random.randn(cfg.m_dim, cfg.k) * 0.1).astype(np.float16)
-        B = (np.random.randn(cfg.n_dim, cfg.k) * 0.1).astype(np.float16)
+        A = (np.random.randn(*cfg.spec.operand_shape(OP_A)) * 0.1).astype(np.float16)
+        B = (np.random.randn(*cfg.spec.operand_shape(OP_B)) * 0.1).astype(np.float16)
         with tempfile.NamedTemporaryFile(suffix=".hsaco", delete=True) as tmp:
             compile_gemm(cfg, tmp.name)
             C_output, _ = execute_gemm_hsaco(cfg, tmp.name, 1, A, B)
@@ -363,8 +386,8 @@ class TestWeakScaledMappedGemmInstanceSerde:
             dict(load_type="buffer", b_path="direct_b"),
             dict(b_path="direct_ab"),
             dict(load_type="buffer", b_path="direct_ab"),
-            dict(num_wg_per_cu=2, m_wg=38),
-            dict(num_wg_per_cu=4, m_wg=76),
+            dict(num_wg_per_cu=2, num_workgroups_per_kernel=[38, 16, 1]),
+            dict(num_wg_per_cu=4, num_workgroups_per_kernel=[76, 16, 1]),
             dict(lcm_unroll=False),
             dict(unroll_factor_multiplier=3),
             dict(epilogue_peeling=False),
@@ -380,7 +403,7 @@ class TestWeakScaledMappedGemmInstanceSerde:
                 ll_sched=True,
                 hoist_wait=True,
                 num_wg_per_cu=2,
-                m_wg=38,
+                num_workgroups_per_kernel=[38, 16, 1],
                 load_type="buffer",
                 b_path="direct_b",
                 pipeline_strategy=7,
@@ -408,13 +431,9 @@ class TestWeakScaledMappedGemmInstanceSerde:
     )
     def test_label_roundtrip(self, kwargs):
         base = dict(
-            m_wg=19,
-            n_wg=16,
-            m_waves=2,
-            n_waves=2,
-            m_tiles_wg=8,
-            n_tiles_wg=8,
-            k_tiles=2,
+            num_workgroups_per_kernel=[19, 16, 1],
+            num_waves_per_wg=[2, 2, 1],
+            num_tiles_per_wg=[8, 8, 2],
             a_stages=2,
             k=8192,
             pipeline_strategy=1,
@@ -424,14 +443,7 @@ class TestWeakScaledMappedGemmInstanceSerde:
         restored = WeakScaledMappedGemmInstance.from_label(cfg.label)
         assert restored.label == cfg.label
         for field in [
-            "m_wg",
-            "n_wg",
-            "m_waves",
-            "n_waves",
-            "m_tiles_wg",
-            "n_tiles_wg",
-            "k_tiles",
-            "k",
+            "gemm_size",
             "a_stages",
             "b_stages",
             "pipeline_strategy",
@@ -443,9 +455,9 @@ class TestWeakScaledMappedGemmInstanceSerde:
             "epilogue_peeling",
             "ll_sched",
             "hoist_wait",
-            "m_dim",
-            "n_dim",
-            "num_workgroups",
+            "num_workgroups_per_kernel",
+            "num_waves_per_workgroup",
+            "num_tiles_per_workgroup",
             "num_threads",
         ]:
             assert getattr(restored, field) == getattr(
@@ -458,7 +470,7 @@ class TestWeakScaledMappedGemmInstanceSerde:
 
     def test_from_label_rejects_truncated(self):
         cfg = _make_weak_scaled_mapped_gemm_instance(
-            19, 16, 2, 2, 8, 8, 1, k=4096, a_stages=2, pipeline_strategy=1
+            [19, 16, 1], [2, 2, 1], [8, 8, 1], k=4096, a_stages=2, pipeline_strategy=1
         )
         with pytest.raises(ValueError):
             WeakScaledMappedGemmInstance.from_label(cfg.label[:-5])

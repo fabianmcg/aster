@@ -15,6 +15,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
 
+from kittens.gemm_config import DIM_M, DIM_N, DIM_K
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
@@ -86,7 +88,7 @@ def make_sweep_pins(args, attr_map):
     Args:
         args: Parsed argparse namespace.
         attr_map: Dict mapping argparse attribute names to config attribute names.
-            E.g. {"stages": "num_stages", "m_waves": "m_waves"}.
+            E.g. {"stages": "num_stages", "waves_per_wg_m": "waves_per_wg_m"}.
             If a CLI arg is None, it is ignored (not pinned).
 
     Returns:
@@ -533,9 +535,9 @@ def run_on_gpus(configs, hsaco_paths, num_iterations, num_gpus, desc="Running"):
                 cfg.kernel_name,
                 cfg.num_workgroups,
                 cfg.num_threads,
-                cfg.m_dim,
-                cfg.n_dim,
-                cfg.k,
+                cfg.gemm_size[DIM_M],
+                cfg.gemm_size[DIM_N],
+                cfg.gemm_size[DIM_K],
                 num_iterations,
                 getattr(cfg, "direct_b", False),
                 getattr(cfg, "direct_a", False),
@@ -679,9 +681,9 @@ def verify_on_gpus(configs, hsaco_paths, num_gpus, desc="Verifying"):
             cfg.kernel_name,
             cfg.num_workgroups,
             cfg.num_threads,
-            cfg.m_dim,
-            cfg.n_dim,
-            cfg.k,
+            cfg.gemm_size[DIM_M],
+            cfg.gemm_size[DIM_N],
+            cfg.gemm_size[DIM_K],
             getattr(cfg, "direct_b", False),
             getattr(cfg, "direct_a", False),
         )
@@ -931,9 +933,9 @@ def bench_perf_sweep_pipelined(
                         cfg.kernel_name,
                         cfg.num_workgroups,
                         cfg.num_threads,
-                        cfg.m_dim,
-                        cfg.n_dim,
-                        cfg.k,
+                        cfg.gemm_size[DIM_M],
+                        cfg.gemm_size[DIM_N],
+                        cfg.gemm_size[DIM_K],
                         NUM_ITERATIONS,
                         getattr(cfg, "direct_b", False),
                         getattr(cfg, "direct_a", False),
@@ -986,28 +988,42 @@ def bench_perf_sweep_pipelined(
         import time
 
         drain_timeout = 10.0 if interrupted else 30.0
-        print(
-            f"Draining {in_flight} in-flight exec results "
-            f"(timeout {drain_timeout:.0f}s)...",
-            end="",
-            flush=True,
-        )
         t0 = time.monotonic()
-        alive = [t for t in gpu_threads if t.is_alive()]
-        for t in alive:
-            remaining = max(0.1, drain_timeout - (time.monotonic() - t0))
-            t.join(timeout=remaining)
-        elapsed = time.monotonic() - t0
+        drained = 0
+        remaining_count = in_flight
+        while any(t.is_alive() for t in gpu_threads):
+            elapsed = time.monotonic() - t0
+            if elapsed >= drain_timeout:
+                break
+            print(
+                f"\rDraining {remaining_count} in-flight exec results "
+                f"(timeout {drain_timeout:.0f}s, {elapsed:.0f}s elapsed)...",
+                end="",
+                flush=True,
+            )
+            dn, _ = _drain_exec_results(
+                exec_result_q, cfg_by_label, results, exec_failed
+            )
+            drained += dn
+            remaining_count = max(0, remaining_count - dn)
+            for t in gpu_threads:
+                if t.is_alive():
+                    t.join(timeout=0.5)
+                    break
         dn, _ = _drain_exec_results(exec_result_q, cfg_by_label, results, exec_failed)
-        n_exec_done += dn
+        drained += dn
+        remaining_count = max(0, remaining_count - dn)
+        n_exec_done += drained
+        elapsed = time.monotonic() - t0
         still_running = sum(1 for t in gpu_threads if t.is_alive())
         if still_running:
             print(
-                f" {dn} collected, {still_running} workers still busy "
+                f"\rDraining {remaining_count} in-flight exec results -- "
+                f"{drained} collected, {still_running} workers still busy "
                 f"({elapsed:.1f}s, giving up)."
             )
         else:
-            print(f" done ({dn} collected, {elapsed:.1f}s).")
+            print(f"\rDraining done: {drained} collected ({elapsed:.1f}s)." + " " * 30)
     else:
         for t in gpu_threads:
             t.join(timeout=5.0)
@@ -1175,27 +1191,32 @@ def bench_perf_sweep(
 
 
 def make_inputs(cfg, zero_init=False):
+    from kittens.gemm_config import A as OP_A, B as OP_B
+
+    shape_a = cfg.spec.operand_shape(OP_A)
+    shape_b = cfg.spec.operand_shape(OP_B)
     if zero_init:
-        A = np.zeros((cfg.m_dim, cfg.k), dtype=np.float16)
-        B = np.zeros((cfg.n_dim, cfg.k), dtype=np.float16)
+        A = np.zeros(shape_a, dtype=np.float16)
+        B = np.zeros(shape_b, dtype=np.float16)
     else:
         np.random.seed(42)
-        A = (np.random.randn(cfg.m_dim, cfg.k) * 0.1).astype(np.float16)
-        B = (np.random.randn(cfg.n_dim, cfg.k) * 0.1).astype(np.float16)
+        A = (np.random.randn(*shape_a) * 0.1).astype(np.float16)
+        B = (np.random.randn(*shape_b) * 0.1).astype(np.float16)
     return A, B
 
 
 def print_config(cfg, resources=None):
+    gs = cfg.gemm_size
     print(f"Config: {cfg.label}")
-    print(f"  problem:    M={cfg.m_dim}, N={cfg.n_dim}, K={cfg.k}")
+    print(f"  problem:    M={gs[DIM_M]}, N={gs[DIM_N]}, K={gs[DIM_K]}")
     print(
-        f"  grid:       {cfg.num_workgroups} WGs ({cfg.m_wg}x{cfg.n_wg}), "
-        f"{cfg.num_waves} waves/WG ({cfg.m_waves}x{cfg.n_waves}), "
+        f"  grid:       {cfg.mapping.num_workgroups_per_kernel} WGs, "
+        f"{cfg.mapping.num_waves_per_workgroup} waves/WG, "
         f"{cfg.num_threads} threads"
     )
     print(
-        f"  tiles/WG:   {cfg.m_tiles_wg}x{cfg.n_tiles_wg}x{cfg.k_tiles} "
-        f"(per-wave: {cfg.m_tiles}x{cfg.n_tiles}x{cfg.k_tiles})"
+        f"  tiles/WG:   {cfg.mapping.num_tiles_per_workgroup} "
+        f"(per-wave: {cfg.mapping.num_tiles_per_wave})"
     )
     print(f"  pipeline:   strategy={cfg.pipeline_strategy}")
     print(
