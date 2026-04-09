@@ -108,8 +108,10 @@ class KernelResources:
             if lanes_needed > lanes_available:
                 violations.append(
                     f"CU reg file: align{g}({self.vgpr_count}+{self.agpr_count})"
-                    f"={aligned} * {total_waves} waves * {wf} lanes"
-                    f" = {lanes_needed} > regsPerMultiprocessor ({lanes_available})"
+                    f"={aligned} * {total_waves} waves"
+                    f" ({num_waves} waves/WG * {num_wg_per_cu} WG/CU occupancy requested by user)"
+                    f" * {wf} lanes = {lanes_needed}"
+                    f" > regsPerMultiprocessor ({lanes_available})"
                 )
         lds_budget = target.lds_per_cu // num_wg_per_cu
         if self.lds_bytes > lds_budget:
