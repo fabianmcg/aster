@@ -244,6 +244,70 @@ phase1_resolve_python() {
     fi
 }
 
+phase1_map_package() {
+    # Map a missing command to a package name for the current PLATFORM.
+    # Prints nothing if the item is handled separately (e.g. uv, python).
+    local cmd="$1"
+    case "$cmd" in
+        clang|clang++|clang-*|clang++-*) echo "clang" ;;
+        lld|lld-*|ld.lld) echo "lld" ;;
+        ninja)
+            case "$PLATFORM" in
+                debian|fedora) echo "ninja-build" ;;
+                macos)        echo "ninja" ;;
+            esac ;;
+        cmake)   echo "cmake" ;;
+        ccache)  echo "ccache" ;;
+        git)     echo "git" ;;
+        uv|python3*) ;; # handled by phase1_print_install_hint separately
+        *) echo "$cmd" ;;
+    esac
+}
+
+phase1_print_install_hint() {
+    # Dedup packages using a sorted uniq over the mapped names.
+    local pkgs=() needs_uv=false needs_python=false item mapped existing found
+    for item in "${MISSING[@]}"; do
+        case "$item" in
+            uv) needs_uv=true; continue ;;
+            python3*) needs_python=true; continue ;;
+        esac
+        mapped=$(phase1_map_package "$item")
+        [ -z "$mapped" ] && continue
+        found=false
+        for existing in "${pkgs[@]}"; do
+            [ "$existing" = "$mapped" ] && { found=true; break; }
+        done
+        [ "$found" = false ] && pkgs+=("$mapped")
+    done
+
+    echo ""
+    echo "  To install the missing prerequisites, run:"
+    case "$PLATFORM" in
+        debian)
+            if [ ${#pkgs[@]} -gt 0 ]; then
+                echo "    sudo apt-get update && sudo apt-get install -y ${pkgs[*]}"
+            fi
+            [ "$needs_python" = true ] && \
+                echo "    sudo apt-get install -y python3.12 python3.12-venv"
+            ;;
+        fedora)
+            [ ${#pkgs[@]} -gt 0 ] && echo "    sudo dnf install -y ${pkgs[*]}"
+            [ "$needs_python" = true ] && echo "    sudo dnf install -y python3.12"
+            ;;
+        macos)
+            [ ${#pkgs[@]} -gt 0 ] && echo "    brew install ${pkgs[*]}"
+            [ "$needs_python" = true ] && echo "    brew install python@3.12"
+            ;;
+        *)
+            echo "    (unknown platform: install ${MISSING[*]} via your package manager)"
+            ;;
+    esac
+    [ "$needs_uv" = true ] && \
+        echo "    curl -LsSf https://astral.sh/uv/install.sh | sh"
+    echo ""
+}
+
 phase1_prerequisites() {
     info "Phase 1: Checking prerequisites"
     MISSING=()
@@ -253,6 +317,7 @@ phase1_prerequisites() {
 
     if [ ${#MISSING[@]} -gt 0 ]; then
         err "Missing prerequisites: ${MISSING[*]}"
+        phase1_print_install_hint
         exit 1
     fi
     echo ""
