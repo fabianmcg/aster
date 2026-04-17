@@ -4,10 +4,9 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#include "aster/Dialect/AMX/Target/TranslateToAsm.h"
+#include "aster/Dialect/X86/Target/TranslateToAsm.h"
 
-#include "aster/Dialect/AMX/IR/AMXDialect.h"
-#include "aster/Dialect/AMX/IR/Interfaces/AMXAsmOpInterface.h"
+#include "aster/Dialect/X86/IR/X86Dialect.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Support/IndentedOstream.h"
@@ -16,13 +15,13 @@
 #include "llvm/Support/LogicalResult.h"
 
 using namespace mlir;
-using namespace mlir::aster::amx;
+using namespace mlir::aster::x86;
 
 namespace {
 
-/// Minimal x86_64 AT&T asm emitter for contrib/cpu AMX modules.
+/// Minimal x86_64 AT&T asm emitter for contrib/cpu X86 modules.
 struct TranslateModuleImpl {
-  TranslateModuleImpl(ModuleOp module, raw_ostream &os)
+  TranslateModuleImpl(mlir::ModuleOp module, raw_ostream &os)
       : module(module), os(os) {}
 
   /// Translate the module to assembly.
@@ -32,7 +31,7 @@ private:
   /// Emit the given function (tilecfg + prologue + body + epilogue).
   LogicalResult emitFunc(func::FuncOp func, size_t funcIndex);
   /// Emit a .rodata block containing the 64-byte AMX TILECFG derived
-  /// from the `!amx.tile<tmmN, ...>` types referenced by `func`.
+  /// from the `!x86.amx.tmm<N, ...>` types referenced by `func`.
   LogicalResult emitFuncTileCfg(func::FuncOp func);
   /// Emit the SysV prologue: .text / .globl / .p2align / .type + label.
   LogicalResult emitFuncPrologue(func::FuncOp func);
@@ -40,11 +39,11 @@ private:
   LogicalResult emitFuncEpilogue(func::FuncOp func, size_t funcIndex);
   /// Emit a single basic block.
   LogicalResult emitBlock(Block &block);
-  /// Emit a single operation by dispatching through `AMXAsmOpInterface`.
+  /// Emit a single operation by dispatching through `X86AsmOpInterface`.
   LogicalResult emitOperation(Operation &op);
 
   /// The module being translated.
-  ModuleOp module;
+  mlir::ModuleOp module;
   /// The output stream, with indentation under our control.
   raw_indented_ostream os;
 };
@@ -64,9 +63,9 @@ buildTileCfgBytes(func::FuncOp func) {
   };
   SmallVector<TileInfo, 8> tiles(8);
 
-  auto visit = [&](TileType t) -> LogicalResult {
-    int64_t idx = static_cast<int64_t>(t.getReg());
-    StringRef name = ::mlir::aster::x86::stringifyTmmEnum(t.getReg());
+  auto visit = [&](TMMType t) -> LogicalResult {
+    int64_t idx = t.getReg();
+    std::string name = "tmm" + std::to_string(idx);
     int64_t rowBytes =
         t.getCols() * (t.getElementType().getIntOrFloatBitWidth() / 8);
     if (rowBytes > 64)
@@ -87,11 +86,11 @@ buildTileCfgBytes(func::FuncOp func) {
 
   WalkResult walk = func.walk([&](Operation *op) -> WalkResult {
     for (Type t : op->getOperandTypes())
-      if (auto tile = dyn_cast<TileType>(t))
+      if (auto tile = dyn_cast<TMMType>(t))
         if (failed(visit(tile)))
           return WalkResult::interrupt();
     for (Type t : op->getResultTypes())
-      if (auto tile = dyn_cast<TileType>(t))
+      if (auto tile = dyn_cast<TMMType>(t))
         if (failed(visit(tile)))
           return WalkResult::interrupt();
     return WalkResult::advance();
@@ -101,14 +100,17 @@ buildTileCfgBytes(func::FuncOp func) {
     return failure();
 
   SmallVector<uint8_t, 64> bytes(64, 0);
-  bytes[0] = 1; // palette_id = 1
+  bool hasTiles = false;
   for (int i = 0; i < 8; ++i) {
     if (tiles[i].rows == -1)
       continue;
+    hasTiles = true;
     bytes[16 + 2 * i] = static_cast<uint8_t>(tiles[i].colsb & 0xff);
     bytes[16 + 2 * i + 1] = static_cast<uint8_t>((tiles[i].colsb >> 8) & 0xff);
     bytes[48 + i] = static_cast<uint8_t>(tiles[i].rows);
   }
+  if (hasTiles)
+    bytes[0] = 1; // palette_id = 1
   return bytes;
 }
 
@@ -116,6 +118,9 @@ LogicalResult TranslateModuleImpl::emitFuncTileCfg(func::FuncOp func) {
   FailureOr<SmallVector<uint8_t, 64>> bytes = buildTileCfgBytes(func);
   if (failed(bytes))
     return failure();
+  // Skip TILECFG for functions that use no AMX tiles.
+  if (llvm::all_of(*bytes, [](uint8_t b) { return b == 0; }))
+    return success();
   StringRef name = func.getSymName();
   os.indent();
   os << ".section .rodata\n";
@@ -161,22 +166,22 @@ LogicalResult TranslateModuleImpl::emitBlock(Block &block) {
 }
 
 LogicalResult TranslateModuleImpl::emitOperation(Operation &op) {
-  if (auto amx = dyn_cast<AMXAsmOpInterface>(&op)) {
-    amx.printAsm(os);
+  if (auto asmOp = dyn_cast<X86AsmOpInterface>(&op)) {
+    asmOp.printAsm(os);
     return success();
   }
   if (isa<func::ReturnOp>(&op)) {
     os << "retq\n";
     return success();
   }
-  return op.emitError() << "amx TranslateToAsm: unsupported op '"
+  return op.emitError() << "x86 TranslateToAsm: unsupported op '"
                         << op.getName() << "'";
 }
 
 LogicalResult TranslateModuleImpl::emitFunc(func::FuncOp func,
                                             size_t funcIndex) {
   assert(func.getBody().hasOneBlock() &&
-         "amx TranslateToAsm: multi-block functions not supported");
+         "x86 TranslateToAsm: multi-block functions not supported");
   if (failed(emitFuncTileCfg(func)))
     return failure();
   if (failed(emitFuncPrologue(func)))
@@ -202,9 +207,9 @@ LogicalResult TranslateModuleImpl::translate() {
 
 } // namespace
 
-LogicalResult mlir::aster::amx::translateToAsm(Operation *op, raw_ostream &os) {
-  auto moduleOp = dyn_cast<ModuleOp>(op);
+LogicalResult mlir::aster::x86::translateToAsm(Operation *op, raw_ostream &os) {
+  auto moduleOp = dyn_cast<mlir::ModuleOp>(op);
   if (!moduleOp)
-    return op->emitError() << "amx TranslateToAsm expects a ModuleOp";
+    return op->emitError() << "x86 TranslateToAsm expects a ModuleOp";
   return TranslateModuleImpl(moduleOp, os).translate();
 }
