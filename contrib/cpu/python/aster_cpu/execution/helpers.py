@@ -3,7 +3,6 @@
 # Licensed under the Apache License v2.0 with LLVM Exceptions.
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-
 """End-to-end execution helpers for contrib/cpu AMX kernels."""
 
 import ctypes
@@ -83,6 +82,9 @@ def compile_and_run(
     print_asm: bool = False,
 ) -> None:
     import pytest
+
+    if not shutil.which("aster-cpu-translate"):
+        pytest.skip("aster-cpu-translate not on PATH (CPU backend not built)")
 
     obj_path = _compile_to_object(mlir_filename, tmp_path)
 
