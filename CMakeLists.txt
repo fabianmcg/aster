@@ -61,6 +61,15 @@ include_directories(${ASTER_BINARY_DIR}/include)
 include_directories(${ASTER_SOURCE_DIR}/contrib/cpu/include)
 include_directories(${ASTER_BINARY_DIR}/contrib/cpu/include)
 add_subdirectory(tools/amdgcn-tblgen)
+add_subdirectory(tools/aster-tblgen)
+
+function(aster_tablegen ofn)
+  tablegen(AsterGen ${ARGV})
+  set(TABLEGEN_OUTPUT
+      ${TABLEGEN_OUTPUT} ${CMAKE_CURRENT_BINARY_DIR}/${ofn}
+      PARENT_SCOPE
+  )
+endfunction()
 
 function(amdgcn_tablegen ofn)
   tablegen(Aster ${ARGV})
