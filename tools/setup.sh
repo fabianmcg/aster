@@ -386,7 +386,7 @@ phase2_ensure_source_checkout() {
         fi
         echo "  Cloning llvm-project (shallow fetch of pinned commit)..."
         git init "$LLVM_PROJECT"
-        git -C "$LLVM_PROJECT" remote add origin https://github.com/nicolasvasilache/llvm-project.git
+        git -C "$LLVM_PROJECT" remote add origin https://github.com/fabianmcg/llvm-project.git
         git -C "$LLVM_PROJECT" fetch --depth 1 origin "$EXPECTED_COMMIT"
         git -C "$LLVM_PROJECT" checkout FETCH_HEAD
     fi
