@@ -215,7 +215,7 @@ MemoryLocation MemoryDependenceAnalysis::getMemoryLocation(Operation *op) {
                  : cast<ValueOrI32>(load.getConstantOffset().value())
                        .getConst()
                        .value_or(0);
-  } else if (auto store = dyn_cast<amdgcn::StoreOp>(op)) {
+  } else if (auto store = dyn_cast<StoreOpInterface>(op)) {
     address = store.getAddr();
     dataValue = store.getData();
     vgprOffset = store.getDynamicOffset();
@@ -223,7 +223,7 @@ MemoryLocation MemoryDependenceAnalysis::getMemoryLocation(Operation *op) {
     // FIXME: This doesn't handle unrealized constant offsets.
     offset = !store.getConstantOffset()
                  ? 0
-                 : cast<ValueOrI32>(store.getConstantOffset())
+                 : cast<ValueOrI32>(store.getConstantOffset().value())
                        .getConst()
                        .value_or(0);
   } else if (auto loadLds = dyn_cast<amdgcn::LoadToLDSOp>(op)) {
