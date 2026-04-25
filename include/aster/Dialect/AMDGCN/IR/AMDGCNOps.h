@@ -28,6 +28,7 @@
 #include "aster/Interfaces/LoadOpInterface.h"
 #include "aster/Interfaces/ModuleOpInterface.h"
 #include "aster/Interfaces/OperandBundleOpInterface.h"
+#include "aster/Interfaces/StoreOpInterface.h"
 #include "mlir/Bytecode/BytecodeOpInterface.h"
 #include "mlir/Dialect/Ptr/IR/PtrEnums.h"
 #include "mlir/IR/Builders.h"

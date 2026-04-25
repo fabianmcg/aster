@@ -18,6 +18,7 @@
 include "aster/Dialect/AMDGCN/IR/AMDGCN.td"
 include "aster/Interfaces/DependentOpInterface.td"
 include "aster/Interfaces/LoadOpInterface.td"
+include "aster/Interfaces/StoreOpInterface.td"
 
 //===----------------------------------------------------------------------===//
 // Memory address operand type
@@ -126,7 +127,8 @@ def AMDGCN_LoadOp : AMDGCN_InstOp<"load", [
 def AMDGCN_StoreOp : AMDGCN_InstOp<"store", [
     ConditionallySpeculatable, MemoryEffectsOpInterface,
     DeclareOpInterfaceMethods<DependentOpInterface>,
-    DeclareOpInterfaceMethods<InferTypeOpInterface>
+    DeclareOpInterfaceMethods<InferTypeOpInterface>,
+    StoreOpInterface
   ]> {
   let cppNamespace = "::mlir::aster::amdgcn";
   let summary = "AMDGCN memory store operation";

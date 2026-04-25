@@ -67,6 +67,11 @@ mlir_tablegen(LoadOpInterface.h.inc -gen-op-interface-decls)
 mlir_tablegen(LoadOpInterface.cpp.inc -gen-op-interface-defs)
 add_public_tablegen_target(LoadOpInterfaceIncGen)
 
+set(LLVM_TARGET_DEFINITIONS StoreOpInterface.td)
+mlir_tablegen(StoreOpInterface.h.inc -gen-op-interface-decls)
+mlir_tablegen(StoreOpInterface.cpp.inc -gen-op-interface-defs)
+add_public_tablegen_target(StoreOpInterfaceIncGen)
+
 set(LLVM_TARGET_DEFINITIONS SchedInterfaces.td)
 mlir_tablegen(SchedInterfaces.h.inc -gen-attr-interface-decls)
 mlir_tablegen(SchedInterfaces.cpp.inc -gen-attr-interface-defs)

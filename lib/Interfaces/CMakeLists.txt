@@ -5,6 +5,7 @@ set(LLVM_OPTIONAL_SOURCES
   InstOpInterface.cpp
   LivenessOpInterface.cpp
   LoadOpInterface.cpp
+  StoreOpInterface.cpp
   MemorySpaceConstraints.cpp
   ModuleOpInterface.cpp
   OperandBundleOpInterface.cpp
@@ -22,6 +23,7 @@ add_mlir_library(AsterInterfaces
   InstOpInterface.cpp
   LivenessOpInterface.cpp
   LoadOpInterface.cpp
+  StoreOpInterface.cpp
   MemorySpaceConstraints.cpp
   ModuleOpInterface.cpp
   OperandBundleOpInterface.cpp
@@ -37,6 +39,7 @@ add_mlir_library(AsterInterfaces
   InstOpInterfaceIncGen
   LivenessOpInterfaceIncGen
   LoadOpInterfaceIncGen
+  StoreOpInterfaceIncGen
   MemorySpaceConstraintsIncGen
   ModuleOpInterfaceIncGen
   OperandBundleOpInterfaceIncGen
