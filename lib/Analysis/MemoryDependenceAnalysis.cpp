@@ -204,16 +204,17 @@ MemoryLocation MemoryDependenceAnalysis::getMemoryLocation(Operation *op) {
     llvm_unreachable("Unknown memory operation");
   }
 
-  if (auto load = dyn_cast<amdgcn::LoadOp>(op)) {
+  if (auto load = dyn_cast<LoadOpInterface>(op)) {
     address = load.getAddr();
-    dataValue = load.getDest();
+    dataValue = load.getDst();
     vgprOffset = load.getDynamicOffset();
     sgprOffset = load.getUniformOffset();
     // FIXME: This doesn't handle unrealized constant offsets.
-    offset =
-        !load.getConstantOffset()
-            ? 0
-            : cast<ValueOrI32>(load.getConstantOffset()).getConst().value_or(0);
+    offset = !load.getConstantOffset()
+                 ? 0
+                 : cast<ValueOrI32>(load.getConstantOffset().value())
+                       .getConst()
+                       .value_or(0);
   } else if (auto store = dyn_cast<amdgcn::StoreOp>(op)) {
     address = store.getAddr();
     dataValue = store.getData();

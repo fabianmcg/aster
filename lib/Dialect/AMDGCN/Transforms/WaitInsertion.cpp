@@ -96,9 +96,9 @@ struct WaitTransformImpl {
   /// The entry block of the function.
   Block *entryBlock = nullptr;
   /// A map from load operations to their corresponding alloca operations.
-  DenseMap<LoadOp, memref::AllocaOp> loadToAlloca;
+  DenseMap<LoadOpInterface, memref::AllocaOp> loadToAlloca;
   /// A set of load operations that are consumed by the current instruction.
-  DenseSet<LoadOp> definitions;
+  DenseSet<LoadOpInterface> definitions;
 };
 } // namespace
 
@@ -133,7 +133,8 @@ void WaitTransformImpl::collectDefinitions(InstOpInterface instOp) {
              "expected to find allocas for operand in reaching definitions");
       for (Value alloc : *allocasOrFailure) {
         for (Definition definition : reachingDefinitions->getRange(alloc))
-          definitions.insert(cast<LoadOp>(definition.definition->getOwner()));
+          definitions.insert(
+              cast<LoadOpInterface>(definition.definition->getOwner()));
       }
     }
   };
@@ -148,7 +149,7 @@ void WaitTransformImpl::collectDefinitions(InstOpInterface instOp) {
 void WaitTransformImpl::handleDefinitions(InstOpInterface instOp) {
   OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPoint(instOp);
-  for (LoadOp loadOp : definitions) {
+  for (LoadOpInterface loadOp : definitions) {
     memref::AllocaOp &allocaOp = loadToAlloca[loadOp];
     // Create the alloca operation if it doesn't exist.
     if (!allocaOp) {
@@ -160,8 +161,8 @@ void WaitTransformImpl::handleDefinitions(InstOpInterface instOp) {
           MemRefType::get({}, loadOp.getToken().getType()));
 
       // Store the token into the alloca operation.
-      rewriter.setInsertionPointAfter(loadOp);
-      memref::StoreOp::create(rewriter, loadOp.getLoc(), loadOp.getToken(),
+      rewriter.setInsertionPointAfter(loadOp.getOperation());
+      memref::StoreOp::create(rewriter, loadOp->getLoc(), loadOp.getToken(),
                               allocaOp.getResult());
     }
 
@@ -200,7 +201,7 @@ void WaitInsertion::runOnOperation() {
   DataFlowSolver solver(DataFlowConfig().setInterprocedural(false));
   dataflow::loadBaselineAnalyses(solver);
   auto loadFilter =
-      +[](Operation *o) -> bool { return isa<amdgcn::LoadOp>(o); };
+      +[](Operation *o) -> bool { return isa<LoadOpInterface>(o); };
 
   // This callback has the effect of killing the loads if they are consumed as
   // input, the rationale being that this is equivalent to killing the token
