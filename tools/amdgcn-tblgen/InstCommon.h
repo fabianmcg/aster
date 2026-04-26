@@ -21,9 +21,11 @@
 #include "mlir/TableGen/Constraint.h"
 #include "mlir/TableGen/Format.h"
 #include "mlir/TableGen/Operator.h"
+#include "mlir/TableGen/Predicate.h"
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallVectorExtras.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Record.h"
 
@@ -201,6 +203,45 @@ struct ISAVersion : public RecordMixin<ISAVersion> {
   EnumCaseInfo getAsEnumCase() const { return EnumCaseInfo(def); }
 };
 
+/// A concrete encoding of an instruction for a specific architecture.
+struct EncodedArchRecord : public RecordMixin<EncodedArchRecord> {
+  using Base::Base;
+  static constexpr llvm::StringRef ClassType = "EncodedArch";
+  /// Get the architecture enum case.
+  EnumCaseInfo getArch() const { return getDefAs<EnumCaseInfo>("arch"); }
+  /// Get the encoding enum case.
+  EnumCaseInfo getEncoding() const {
+    return getDefAs<EnumCaseInfo>("encoding");
+  }
+};
+
+/// A concrete instruction encoding with opcode.
+struct InstEncRecord : public RecordMixin<InstEncRecord> {
+  using Base::Base;
+  static constexpr llvm::StringRef ClassType = "InstEnc";
+  /// Get the encoded archs (encoding + architecture pairs) this encoding
+  /// applies to.
+  SmallVector<EncodedArchRecord> getEncodedArchs() const {
+    return getRecordList<EncodedArchRecord>("archs");
+  }
+  /// Get the opcode for this encoding.
+  int64_t getOpcode() const { return def->getValueAsInt("opcode"); }
+  /// Get the per-encoding type-constraint dag (head is the `pred` marker).
+  const llvm::DagInit *getConstraintsDag() const {
+    return def->getValueAsDag("constraints");
+  }
+};
+
+/// Get the encodings from an AMDISAInstruction record.
+inline SmallVector<InstEncRecord>
+getEncodingsFromRecord(const llvm::Record &rec) {
+  return llvm::map_to_vector(rec.getValueAsListInit("encodings")->getElements(),
+                             [](const llvm::Init *init) {
+                               return InstEncRecord(
+                                   cast<llvm::DefInit>(init)->getDef());
+                             });
+}
+
 /// AMDGCN instruction property definition.
 struct InstProp : public RecordMixin<InstProp> {
   using Base::Base;
@@ -223,13 +264,23 @@ struct InstConstraint : public RecordMixin<InstConstraint> {
   }
 };
 
-/// AMDGCN instruction assembly argument format.
+/// AMDGCN instruction assembly argument format (old system: AMDGCNDialect.td).
 struct AsmArgFormat : public RecordMixin<AsmArgFormat> {
   using Base::Base;
   static constexpr llvm::StringRef ClassType = "AsmArgFormat";
 
   /// Get the parser of the argument.
   StringRef getParser() const { return getStringRef("asmParser"); }
+
+  /// Get the printer of the argument.
+  StringRef getPrinter() const { return getStringRef("asmPrinter"); }
+};
+
+/// ISA-level instruction assembly argument format (new system:
+/// aster/IR/Inst.td).
+struct ASMArgFormat : public RecordMixin<ASMArgFormat> {
+  using Base::Base;
+  static constexpr llvm::StringRef ClassType = "ASMArgFormat";
 
   /// Get the printer of the argument.
   StringRef getPrinter() const { return getStringRef("asmPrinter"); }
@@ -245,6 +296,25 @@ struct AsmVariant : public RecordMixin<AsmVariant> {
 
   /// Get the assembly format string.
   StringRef getAsmFormat() const { return getStringRef("asmFormat"); }
+};
+
+/// AMDGCN instruction assembly syntax string.
+struct ASMStringRecord : public RecordMixin<ASMStringRecord> {
+  using Base::Base;
+  static constexpr llvm::StringRef ClassType = "ASMString";
+
+  /// Get the list of encoded archs this syntax applies to.
+  SmallVector<EncodedArchRecord> getArchs() const {
+    return getRecordList<EncodedArchRecord>("archs");
+  }
+
+  /// Get the assembly syntax format string.
+  StringRef getSyntax() const { return getStringRef("syntax"); }
+
+  /// Get the predicate guarding this syntax.
+  mlir::tblgen::Pred getPred() const {
+    return mlir::tblgen::Pred(def->getValueInit("pred"));
+  }
 };
 
 /// AMDGCN instruction definition.
@@ -276,6 +346,11 @@ struct AMDInst : public RecordMixin<AMDInst> {
   /// Get the list of ISA versions this instruction is available on.
   SmallVector<ISAVersion> getISAVersions() const {
     return getRecordList<ISAVersion>("isa");
+  }
+
+  /// Get the list of encodings for this instruction.
+  SmallVector<InstEncRecord> getEncodings() const {
+    return getEncodingsFromRecord(instOp.getDef());
   }
 
   /// Get the list of instruction properties.
@@ -328,12 +403,28 @@ private:
 // Utility functions and classes
 //===----------------------------------------------------------------------===//
 
+/// Build a 'self' expression for an operand accessor.
+/// \p prefix is prepended to the getter call (e.g., "op." or "").
+/// \p emptySelf is returned when \p name is empty (no specific operand).
+inline std::string buildSelfExpr(StringRef prefix, StringRef emptySelf,
+                                 StringRef name) {
+  if (name.empty())
+    return emptySelf.str();
+  return "getTypeOrValue(" + prefix.str() + "get" +
+         llvm::convertToCamelFromSnakeCase(name, true) + "())";
+}
+
 /// Helper class for building strings with a raw_ostream.
 struct StrStream {
   StrStream() : str(""), os(str) {}
   std::string str;
   llvm::raw_string_ostream os;
 };
+
+/// Returns records derived from classType, sorted by ID for determinism.
+llvm::SmallVector<const llvm::Record *>
+getSortedDerivedDefinitions(const llvm::RecordKeeper &records,
+                            llvm::StringRef classType);
 
 /// Get the qualified C++ name.
 std::string getQualName(StringRef cppNamespace, StringRef className);
