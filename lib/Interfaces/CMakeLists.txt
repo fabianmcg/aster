@@ -12,6 +12,7 @@ set(LLVM_OPTIONAL_SOURCES
   RegisterType.cpp
   ResourceInterfaces.cpp
   SchedInterfaces.cpp
+  TargetAttr.cpp
   UpstreamModelsImpl.cpp
   VerifierAttr.cpp
 )
@@ -30,6 +31,7 @@ add_mlir_library(AsterInterfaces
   RegisterType.cpp
   ResourceInterfaces.cpp
   SchedInterfaces.cpp
+  TargetAttr.cpp
   VerifierAttr.cpp
 
   DEPENDS
@@ -47,6 +49,7 @@ add_mlir_library(AsterInterfaces
   RegisterTypeIncGen
   ResourceInterfacesIncGen
   SchedInterfacesIncGen
+  TargetAttrIncGen
   VerifierAttrIncGen
 
   LINK_LIBS PUBLIC
