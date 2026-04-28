@@ -396,22 +396,125 @@ static void genGetEncoding(const mlir::tblgen::Operator &op,
   os << "  return ::mlir::failure();\n}\n\n";
 }
 
+static int getNumOutputs(const mlir::tblgen::Operator &op) {
+  return op.getDef().getValueAsDag("outputs")->getNumArgs();
+}
+
+static int getNumInputs(const mlir::tblgen::Operator &op) {
+  return op.getDef().getValueAsDag("inputs")->getNumArgs();
+}
+
+/// Emits getEffects: concatenates the body of each effect, then dispatches to
+/// the shared impl.
+static void genGetEffects(const mlir::tblgen::Operator &op, raw_ostream &os) {
+  std::string qualClass = op.getQualCppClassName();
+  StringRef className = StringRef(qualClass).ltrim("::");
+
+  os << llvm::formatv(
+      R"(void {0}::getEffects(
+    ::llvm::SmallVectorImpl<::mlir::SideEffects::EffectInstance<::mlir::MemoryEffects::Effect>> &effects) {{
+)",
+      className);
+
+  mlir::tblgen::FmtContext ctx;
+  ctx.addSubst("_op", "(*this)");
+  ctx.addSubst("_effects", "effects");
+  const llvm::ListInit *effectsList = op.getDef().getValueAsListInit("effects");
+  for (const llvm::Init *init : effectsList->getElements()) {
+    const llvm::Record *effectRec = cast<llvm::DefInit>(init)->getDef();
+    StringRef body = effectRec->getValueAsString("body");
+    if (body.empty())
+      continue;
+    os << "  " << mlir::tblgen::tgfmt(body, &ctx) << "\n";
+  }
+  os << "  ::mlir::aster::detail::getInstEffectsImpl(*this, effects);\n";
+  os << "}\n\n";
+}
+
+/// Emits inferReturnTypes: appends one type per output operand whose runtime
+/// type is a RegisterTypeInterface with value semantics.
+static void genInferReturnTypes(const mlir::tblgen::Operator &op,
+                                raw_ostream &os) {
+  std::string qualClass = op.getQualCppClassName();
+  StringRef className = StringRef(qualClass).ltrim("::");
+  int numOutputs = getNumOutputs(op);
+
+  os << llvm::formatv(
+      R"(::llvm::LogicalResult {0}::inferReturnTypes(
+    ::mlir::MLIRContext *context, ::std::optional<::mlir::Location> location,
+    ::mlir::ValueRange operands, ::mlir::DictionaryAttr attributes,
+    ::mlir::PropertyRef properties, ::mlir::RegionRange regions,
+    ::llvm::SmallVectorImpl<::mlir::Type> &inferredReturnTypes) {{
+  {0}::Adaptor adaptor(operands, attributes, properties, regions);
+)",
+      className);
+
+  for (int i = 0; i < numOutputs; ++i) {
+    os << llvm::formatv(
+        R"(  {{
+    auto [_start, _size] = adaptor.getODSOperandIndexAndLength({0});
+    for (::mlir::Type _ty : ::mlir::TypeRange(operands.slice(_start, _size))) {{
+      auto _regTy = ::llvm::dyn_cast<::mlir::aster::RegisterTypeInterface>(_ty);
+      if (_regTy && _regTy.hasValueSemantics())
+        inferredReturnTypes.push_back(_ty);
+    }
+  }
+)",
+        i);
+  }
+  os << "  return ::mlir::success();\n}\n\n";
+}
+
+/// Emits getInstInfo, computing operand and result segment counts via
+/// getODSOperandIndexAndLength and getODSResultIndexAndLength.
+static void genGetInstInfo(const mlir::tblgen::Operator &op, raw_ostream &os) {
+  std::string qualClass = op.getQualCppClassName();
+  StringRef className = StringRef(qualClass).ltrim("::");
+  int numOutputs = getNumOutputs(op);
+  int numInputs = getNumInputs(op);
+
+  os << llvm::formatv("::mlir::aster::InstOpInfo {0}::getInstInfo() {{\n"
+                      "  int32_t numInstOuts = 0;\n",
+                      className);
+  for (int i = 0; i < numOutputs; ++i)
+    os << llvm::formatv(
+        "  numInstOuts += std::get<1>(getODSOperandIndexAndLength({0}));\n", i);
+  os << "  int32_t numInstIns = 0;\n";
+  for (int i = 0; i < numInputs; ++i)
+    os << llvm::formatv(
+        "  numInstIns += std::get<1>(getODSOperandIndexAndLength({0}));\n",
+        numOutputs + i);
+  os << "  int32_t numInstResults = 0;\n";
+  for (int i = 0; i < numOutputs; ++i)
+    os << llvm::formatv(
+        "  numInstResults += std::get<1>(getODSResultIndexAndLength({0}));\n",
+        i);
+  os << "  return ::mlir::aster::InstOpInfo(\n"
+        "      /*numLeadingOperands=*/0, numInstOuts, numInstIns,\n"
+        "      /*numLeadingResults=*/0, numInstResults);\n"
+        "}\n\n";
+}
+
 //===----------------------------------------------------------------------===//
 // Top-level generators
 //===----------------------------------------------------------------------===//
 
 static void genInstMethods(const llvm::Record *rec, raw_ostream &os) {
   mlir::tblgen::Operator op(*rec);
+
   llvm::SmallVector<InstEncRecord> encodings = getEncodingsFromRecord(*rec);
-  if (encodings.empty())
-    return;
-  std::optional<OpEncodingAnalysis> analysis =
-      analyzeOpEncodings(op, encodings);
-  if (!analysis)
-    return;
-  genIsValidOpNameFunc(op, *analysis, os);
-  genIsValidMethod(op, os);
-  genGetEncoding(op, analysis->byArch, os);
+  std::optional<OpEncodingAnalysis> analysis;
+  if (!encodings.empty())
+    analysis = analyzeOpEncodings(op, encodings);
+  if (analysis) {
+    genIsValidOpNameFunc(op, *analysis, os);
+    genIsValidMethod(op, os);
+    genGetEncoding(op, analysis->byArch, os);
+  }
+
+  genGetEffects(op, os);
+  genInferReturnTypes(op, os);
+  genGetInstInfo(op, os);
 }
 
 static bool generateInstMethods(const llvm::RecordKeeper &records,
