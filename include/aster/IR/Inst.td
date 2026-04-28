@@ -36,10 +36,13 @@ class EncodedArch<Encoding _encoding, Arch _arch> {
   Encoding encoding = _encoding;
 }
 
+def pred;
+
 // A concrete instruction encoding with opcode.
-class InstEnc<EncodedArch _arch, int _opcode> {
-  EncodedArch arch = _arch;
+class InstEnc<list<EncodedArch> _archs, int _opcode, dag _constraints = (pred)> {
+  list<EncodedArch> archs = _archs;
   int opcode = _opcode;
+  dag constraints = _constraints;
 }
 
 //===----------------------------------------------------------------------===//
@@ -77,10 +80,8 @@ class Effect {
 // Operands and modifiers
 //===----------------------------------------------------------------------===//
 
-// A type that appears in a particular encoding of an instruction.
-class EncType<list<EncodedArch> _archs, Type _type> : TypeAlias<_type> {
-  list<EncodedArch> archs = _archs;
-}
+// A type constraint that checks if the operand is of any of the specified types.
+class AnyOperandOf<list<Type> types> : AnyTypeOf<types>;
 
 // A const value constraint.
 class ConstValueTypeConstraint {

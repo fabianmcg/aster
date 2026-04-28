@@ -132,8 +132,9 @@ class InlineLitIntPos<list<Type> types> : AnyTypeOf<types, "an inline literal po
 
 class IntType<int bitWidth> : I<bitWidth>;
 
-class OffsetType<int bitWidth> : I<32>, ConstValueTypeConstraint {
+class OffsetType<int bitWidth, bit _isSigned> : I<32>, ConstValueTypeConstraint {
   int offsetWidth = bitWidth;
+  bit isSigned = _isSigned;
   let constraint = CPred<StrSubst<[{
     ::mlir::aster::checkOffsetConst($_self, $_strictness, $_offsetWidth)
   }], [IntRepl<"_offsetWidth", offsetWidth>]>.result>;
