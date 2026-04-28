@@ -14,6 +14,7 @@ add_tablegen(amdgcn-tblgen Aster
   InstCommon.cpp
   InstCommon.h
   InstGen.cpp
+  InstMethodsGen.cpp
   Instruction.cpp
   Instruction.h
   main.cpp

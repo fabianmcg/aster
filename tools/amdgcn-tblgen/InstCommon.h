@@ -24,6 +24,7 @@
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallVectorExtras.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Record.h"
 
@@ -201,6 +202,40 @@ struct ISAVersion : public RecordMixin<ISAVersion> {
   EnumCaseInfo getAsEnumCase() const { return EnumCaseInfo(def); }
 };
 
+/// A concrete encoding of an instruction for a specific architecture.
+struct EncodedArchRecord : public RecordMixin<EncodedArchRecord> {
+  using Base::Base;
+  static constexpr llvm::StringRef ClassType = "EncodedArch";
+  /// Get the architecture enum case.
+  EnumCaseInfo getArch() const { return getDefAs<EnumCaseInfo>("arch"); }
+  /// Get the encoding enum case.
+  EnumCaseInfo getEncoding() const {
+    return getDefAs<EnumCaseInfo>("encoding");
+  }
+};
+
+/// A concrete instruction encoding with opcode.
+struct InstEncRecord : public RecordMixin<InstEncRecord> {
+  using Base::Base;
+  static constexpr llvm::StringRef ClassType = "InstEnc";
+  /// Get the encoded arch (encoding + architecture pair).
+  EncodedArchRecord getEncodedArch() const {
+    return getDefAs<EncodedArchRecord>("arch");
+  }
+  /// Get the opcode for this encoding.
+  int64_t getOpcode() const { return def->getValueAsInt("opcode"); }
+};
+
+/// Get the encodings from an AMDISAInstruction record.
+inline SmallVector<InstEncRecord>
+getEncodingsFromRecord(const llvm::Record &rec) {
+  return llvm::map_to_vector(rec.getValueAsListInit("encodings")->getElements(),
+                             [](const llvm::Init *init) {
+                               return InstEncRecord(
+                                   cast<llvm::DefInit>(init)->getDef());
+                             });
+}
+
 /// AMDGCN instruction property definition.
 struct InstProp : public RecordMixin<InstProp> {
   using Base::Base;
@@ -278,6 +313,11 @@ struct AMDInst : public RecordMixin<AMDInst> {
     return getRecordList<ISAVersion>("isa");
   }
 
+  /// Get the list of encodings for this instruction.
+  SmallVector<InstEncRecord> getEncodings() const {
+    return getEncodingsFromRecord(instOp.getDef());
+  }
+
   /// Get the list of instruction properties.
   SmallVector<InstProp> getInstProp() const {
     return getRecordList<InstProp>("props");
@@ -328,12 +368,28 @@ private:
 // Utility functions and classes
 //===----------------------------------------------------------------------===//
 
+/// Build a 'self' expression for an operand accessor.
+/// \p prefix is prepended to the getter call (e.g., "op." or "").
+/// \p emptySelf is returned when \p name is empty (no specific operand).
+inline std::string buildSelfExpr(StringRef prefix, StringRef emptySelf,
+                                 StringRef name) {
+  if (name.empty())
+    return emptySelf.str();
+  return "getTypeOrValue(" + prefix.str() + "get" +
+         llvm::convertToCamelFromSnakeCase(name, true) + "())";
+}
+
 /// Helper class for building strings with a raw_ostream.
 struct StrStream {
   StrStream() : str(""), os(str) {}
   std::string str;
   llvm::raw_string_ostream os;
 };
+
+/// Returns records derived from classType, sorted by ID for determinism.
+llvm::SmallVector<const llvm::Record *>
+getSortedDerivedDefinitions(const llvm::RecordKeeper &records,
+                            llvm::StringRef classType);
 
 /// Get the qualified C++ name.
 std::string getQualName(StringRef cppNamespace, StringRef className);

@@ -21,6 +21,15 @@ using namespace mlir;
 using namespace mlir::aster::amdgcn;
 using namespace mlir::aster::amdgcn::tblgen;
 
+llvm::SmallVector<const llvm::Record *>
+mlir::aster::amdgcn::tblgen::getSortedDerivedDefinitions(
+    const llvm::RecordKeeper &records, llvm::StringRef classType) {
+  llvm::SmallVector<const llvm::Record *> recs =
+      llvm::to_vector(records.getAllDerivedDefinitions(classType));
+  llvm::sort(recs, llvm::LessRecordByID());
+  return recs;
+}
+
 std::string mlir::aster::amdgcn::tblgen::getQualName(StringRef cppNamespace,
                                                      StringRef className) {
   if (cppNamespace.empty())
