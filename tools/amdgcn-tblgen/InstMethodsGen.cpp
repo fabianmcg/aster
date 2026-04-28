@@ -17,7 +17,10 @@
 #include "mlir/TableGen/Operator.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/TableGen/CodeGenHelpers.h"
+#include "llvm/TableGen/Error.h"
 
 using namespace mlir;
 using namespace mlir::aster::amdgcn;
@@ -38,199 +41,142 @@ static std::string getAdaptorSelf(StringRef name) {
 //===----------------------------------------------------------------------===//
 
 namespace {
+/// A single per-arg type-constraint check.
 struct EncodingConstraint {
   StringRef argName;
   mlir::tblgen::Constraint constraint;
   bool isOptional;
 };
 
-/// Three-state EncType resolution:
-///   nullopt           -> incompatible, skip encoding.
-///   {nullptr, _}      -> no EncType, no check needed.
-///   {rec, isOptional} -> applicable EncType found.
-struct EncTypeMatch {
-  const llvm::Record *rec;
-  bool isOptional;
-};
-
-struct EncWithConstraints {
+/// One (encoding, arch) entry in the per-arch dispatch table. `constraints`
+/// holds the checks that must run inside this entry's branch (any op-level
+/// constraints already hoisted to the common section are omitted).
+struct EncBucket {
   InstEncRecord enc;
+  EncodedArchRecord encodedArch;
   llvm::SmallVector<EncodingConstraint> constraints;
 };
 
-using ByArchMap =
-    llvm::MapVector<StringRef, llvm::SmallVector<EncWithConstraints>>;
+using ByArchMap = llvm::MapVector<StringRef, llvm::SmallVector<EncBucket>>;
 
 struct OpEncodingAnalysis {
   llvm::SmallVector<EncodingConstraint> commonConstraints;
   ByArchMap byArch;
 };
+
+/// Per-encoding override map: argument name -> Type record from the
+/// encoding's `constraints` dag.
+using OverrideMap = llvm::StringMap<const llvm::Record *>;
 } // namespace
 
-/// Returns rec if it is an EncType applicable to encArchDef, else null.
-static const llvm::Record *matchEncTypeRecord(const llvm::Record *rec,
-                                              const llvm::Record *encArchDef) {
-  if (!rec->isSubClassOf("EncType"))
-    return nullptr;
-  for (const llvm::Init *archInit :
-       rec->getValueAsListInit("archs")->getElements()) {
-    if (cast<llvm::DefInit>(archInit)->getDef() == encArchDef)
-      return rec;
-  }
-  return nullptr;
-}
-
-/// Searches rec's allowedTypes for an EncType applicable to encArchDef:
-///   nullopt   -> no allowedTypes or none are EncTypes (no check needed).
-///   non-null  -> applicable EncType found.
-///   null      -> EncTypes present but none apply (skip encoding).
-static std::optional<const llvm::Record *>
-matchEncTypeViaAllowed(const llvm::Record *rec,
-                       const llvm::Record *encArchDef) {
-  if (!rec->getValue("allowedTypes"))
-    return std::nullopt;
-  const llvm::ListInit *allowedTypes = rec->getValueAsListInit("allowedTypes");
-  bool hasEncType =
-      llvm::any_of(allowedTypes->getElements(), [](const llvm::Init *init) {
-        return cast<llvm::DefInit>(init)->getDef()->isSubClassOf("EncType");
-      });
-  if (!hasEncType)
-    return std::nullopt;
-  for (const llvm::Init *init : allowedTypes->getElements()) {
-    const llvm::Record *typeRec = cast<llvm::DefInit>(init)->getDef();
-    if (const llvm::Record *match = matchEncTypeRecord(typeRec, encArchDef))
-      return match;
-  }
-  return static_cast<const llvm::Record *>(nullptr);
-}
-
-static std::optional<EncTypeMatch>
-findEncTypeForEncoding(const mlir::tblgen::TypeConstraint &tc,
-                       const llvm::Record *encArchDef) {
+/// Build the op-level constraint for `operand`, unwrapping Optional<...>.
+/// Returns std::nullopt when an Optional operand has no resolvable baseType.
+static std::optional<EncodingConstraint>
+makeOpLevelConstraint(const mlir::tblgen::NamedTypeConstraint &operand) {
+  const mlir::tblgen::TypeConstraint &tc = operand.constraint;
   const llvm::Record *rec = &tc.getDef();
   bool isOptional = false;
   if (tc.isOptional()) {
     rec = rec->getValueAsOptionalDef("baseType");
     if (!rec)
-      return EncTypeMatch{nullptr, false};
+      return std::nullopt;
     isOptional = true;
   }
-
-  if (rec->isSubClassOf("EncType")) {
-    if (const llvm::Record *match = matchEncTypeRecord(rec, encArchDef))
-      return EncTypeMatch{match, isOptional};
-    return std::nullopt;
-  }
-
-  std::optional<const llvm::Record *> viaAllowed =
-      matchEncTypeViaAllowed(rec, encArchDef);
-  if (!viaAllowed)
-    return EncTypeMatch{nullptr, false};
-  if (!*viaAllowed)
-    return std::nullopt;
-  return EncTypeMatch{*viaAllowed, isOptional};
+  return EncodingConstraint{operand.name, mlir::tblgen::TypeConstraint(rec),
+                            isOptional};
 }
 
-/// True for operands whose EncType record is the same across all encodings.
-static llvm::SmallVector<bool>
-computeUniformOperands(const mlir::tblgen::Operator &op,
-                       llvm::ArrayRef<InstEncRecord> encodings) {
-  int numOps = op.getNumOperands();
-  llvm::SmallVector<bool> isUniform(numOps, false);
-  for (int i = 0; i < numOps; ++i) {
-    const mlir::tblgen::TypeConstraint &tc = op.getOperand(i).constraint;
-    const llvm::Record *referenceRec = nullptr;
-    bool diverges = false;
-    for (const InstEncRecord &enc : encodings) {
-      std::optional<EncTypeMatch> match =
-          findEncTypeForEncoding(tc, &enc.getEncodedArch().getDef());
-      if (!match || !match->rec)
-        continue;
-      if (!referenceRec) {
-        referenceRec = match->rec;
-        continue;
-      }
-      if (match->rec != referenceRec) {
-        diverges = true;
+/// Parse the `constraints` dag of an encoding into a name -> Type record map.
+/// Emits a fatal error if a name does not match any operand of `op`.
+static OverrideMap parseEncodingOverrides(const InstEncRecord &enc,
+                                          const mlir::tblgen::Operator &op) {
+  OverrideMap result;
+  const llvm::DagInit *dag = enc.getConstraintsDag();
+  for (unsigned i = 0, e = dag->getNumArgs(); i < e; ++i) {
+    StringRef name = dag->getArgNameStr(i);
+    const llvm::Init *argInit = dag->getArg(i);
+    const auto *defInit = dyn_cast<llvm::DefInit>(argInit);
+    if (!defInit) {
+      llvm::PrintFatalError(enc.getDef().getLoc(),
+                            "encoding constraint argument '" + name +
+                                "' must be a Type record");
+    }
+    bool found = false;
+    for (int j = 0, je = op.getNumOperands(); j < je; ++j) {
+      if (op.getOperand(j).name == name) {
+        found = true;
         break;
       }
     }
-    isUniform[i] = referenceRec && !diverges;
-  }
-  return isUniform;
-}
-
-/// Returns nullopt if any EncType operand is incompatible with this encoding.
-/// Operands flagged uniform are skipped (hoisted to common checks).
-static std::optional<llvm::SmallVector<EncodingConstraint>>
-getConstraintsForEncoding(const mlir::tblgen::Operator &op,
-                          const llvm::Record *encArchDef,
-                          llvm::ArrayRef<bool> uniformOps) {
-  llvm::SmallVector<EncodingConstraint> result;
-  for (int i = 0, e = op.getNumOperands(); i < e; ++i) {
-    const mlir::tblgen::NamedTypeConstraint &operand = op.getOperand(i);
-    std::optional<EncTypeMatch> match =
-        findEncTypeForEncoding(operand.constraint, encArchDef);
-    if (!match)
-      return std::nullopt;
-    if (!match->rec || uniformOps[i])
-      continue;
-    result.push_back({operand.name, mlir::tblgen::TypeConstraint(match->rec),
-                      match->isOptional});
-  }
-  return result;
-}
-
-/// Constraints for uniform operands, sampled from the first matching encoding.
-static llvm::SmallVector<EncodingConstraint>
-computeCommonConstraints(const mlir::tblgen::Operator &op,
-                         llvm::ArrayRef<InstEncRecord> encodings,
-                         llvm::ArrayRef<bool> uniformOps) {
-  llvm::SmallVector<EncodingConstraint> result;
-  for (int i = 0, e = op.getNumOperands(); i < e; ++i) {
-    if (!uniformOps[i])
-      continue;
-    const mlir::tblgen::NamedTypeConstraint &operand = op.getOperand(i);
-    for (const InstEncRecord &enc : encodings) {
-      std::optional<EncTypeMatch> match = findEncTypeForEncoding(
-          operand.constraint, &enc.getEncodedArch().getDef());
-      if (!match || !match->rec)
-        continue;
-      result.push_back({operand.name, mlir::tblgen::TypeConstraint(match->rec),
-                        match->isOptional});
-      break;
+    if (!found) {
+      llvm::PrintFatalError(
+          enc.getDef().getLoc(),
+          "encoding constraint references unknown argument '" + name +
+              "' in op '" + op.getOperationName() + "'");
     }
+    result[name] = defInit->getDef();
   }
   return result;
 }
 
-static ByArchMap computeByArch(const mlir::tblgen::Operator &op,
-                               llvm::ArrayRef<InstEncRecord> encodings,
-                               llvm::ArrayRef<bool> uniformOps) {
-  ByArchMap byArch;
-  for (const InstEncRecord &enc : encodings) {
-    EncodedArchRecord encArch = enc.getEncodedArch();
-    const llvm::Record *encArchDef = &encArch.getDef();
-    std::optional<llvm::SmallVector<EncodingConstraint>> constraints =
-        getConstraintsForEncoding(op, encArchDef, uniformOps);
-    if (!constraints)
-      continue;
-    byArch[encArch.getArch().getIdentifier()].push_back(
-        {enc, std::move(*constraints)});
-  }
-  return byArch;
-}
-
-/// Returns nullopt when no encoding survives analysis (nothing to emit).
+/// Build the per-op encoding analysis. Returns nullopt when there are no
+/// encodings to dispatch on.
 static std::optional<OpEncodingAnalysis>
 analyzeOpEncodings(const mlir::tblgen::Operator &op,
                    llvm::ArrayRef<InstEncRecord> encodings) {
-  llvm::SmallVector<bool> uniformOps = computeUniformOperands(op, encodings);
-  ByArchMap byArch = computeByArch(op, encodings, uniformOps);
+  if (encodings.empty())
+    return std::nullopt;
+
+  llvm::SmallVector<OverrideMap> overridesPerEnc;
+  overridesPerEnc.reserve(encodings.size());
+  llvm::StringSet<> overriddenNames;
+  for (const InstEncRecord &enc : encodings) {
+    OverrideMap overrides = parseEncodingOverrides(enc, op);
+    for (const auto &kv : overrides)
+      overriddenNames.insert(kv.getKey());
+    overridesPerEnc.push_back(std::move(overrides));
+  }
+
+  llvm::SmallVector<EncodingConstraint> commonConstraints;
+  for (int i = 0, e = op.getNumOperands(); i < e; ++i) {
+    const mlir::tblgen::NamedTypeConstraint &operand = op.getOperand(i);
+    if (overriddenNames.contains(operand.name))
+      continue;
+    std::optional<EncodingConstraint> ec = makeOpLevelConstraint(operand);
+    if (!ec)
+      continue;
+    commonConstraints.push_back(std::move(*ec));
+  }
+
+  ByArchMap byArch;
+  for (auto [encIdx, enc] : llvm::enumerate(encodings)) {
+    const OverrideMap &overrides = overridesPerEnc[encIdx];
+    llvm::SmallVector<EncodingConstraint> bucketConstraints;
+    for (int i = 0, e = op.getNumOperands(); i < e; ++i) {
+      const mlir::tblgen::NamedTypeConstraint &operand = op.getOperand(i);
+      auto it = overrides.find(operand.name);
+      if (it != overrides.end()) {
+        bucketConstraints.push_back({operand.name,
+                                     mlir::tblgen::TypeConstraint(it->second),
+                                     /*isOptional=*/false});
+        continue;
+      }
+      if (!overriddenNames.contains(operand.name))
+        continue;
+      std::optional<EncodingConstraint> ec = makeOpLevelConstraint(operand);
+      if (!ec)
+        continue;
+      bucketConstraints.push_back(std::move(*ec));
+    }
+
+    for (const EncodedArchRecord &encodedArch : enc.getEncodedArchs()) {
+      byArch[encodedArch.getArch().getIdentifier()].push_back(
+          {enc, encodedArch, bucketConstraints});
+    }
+  }
+
   if (byArch.empty())
     return std::nullopt;
-  llvm::SmallVector<EncodingConstraint> commonConstraints =
-      computeCommonConstraints(op, encodings, uniformOps);
   return OpEncodingAnalysis{std::move(commonConstraints), std::move(byArch)};
 }
 
@@ -273,10 +219,10 @@ static void emitEncodingArchPairCheck(const ByArchMap &byArch,
         archId);
     llvm::interleave(
         encs, os,
-        [&](const EncWithConstraints &ewc) {
+        [&](const EncBucket &bucket) {
           os << llvm::formatv(
               "encoding == ::mlir::aster::amdgcn::Encoding::{0}",
-              ewc.enc.getEncodedArch().getEncoding().getIdentifier());
+              bucket.encodedArch.getEncoding().getIdentifier());
         },
         " || ");
     os << ";\n";
@@ -288,16 +234,16 @@ static void emitEncodingArchPairCheck(const ByArchMap &byArch,
 }
 
 /// Emits the per-arch dispatch skeleton shared by isValid and getEncoding.
-static void emitArchDispatch(
-    const ByArchMap &byArch, raw_ostream &os,
-    llvm::function_ref<void(const EncWithConstraints &)> emitEncoding) {
+static void
+emitArchDispatch(const ByArchMap &byArch, raw_ostream &os,
+                 llvm::function_ref<void(const EncBucket &)> emitEncoding) {
   for (auto &[archId, encs] : byArch) {
     os << llvm::formatv(
         R"(  if (tgt.getTargetFamily() == ::mlir::aster::TypedEnum::get(::mlir::aster::amdgcn::ISAVersion::{0})) {{
 )",
         archId);
-    for (const EncWithConstraints &ewc : encs)
-      emitEncoding(ewc);
+    for (const EncBucket &bucket : encs)
+      emitEncoding(bucket);
     os << "    return ::mlir::failure();\n";
     os << "  }\n";
   }
@@ -329,14 +275,13 @@ static void genIsValidOpNameFunc(const mlir::tblgen::Operator &op,
     os << mlir::tblgen::tgfmt(firstPass.data(), &ctx) << "\n";
   }
 
-  emitArchDispatch(analysis.byArch, os, [&](const EncWithConstraints &ewc) {
-    StringRef encodingId =
-        ewc.enc.getEncodedArch().getEncoding().getIdentifier();
+  emitArchDispatch(analysis.byArch, os, [&](const EncBucket &bucket) {
+    StringRef encodingId = bucket.encodedArch.getEncoding().getIdentifier();
     os << llvm::formatv(
         "    if (encoding == ::mlir::aster::amdgcn::Encoding::{0}) {{\n",
         encodingId);
     os << "      auto checkEnc = [&] {\n";
-    for (const EncodingConstraint &ec : ewc.constraints) {
+    for (const EncodingConstraint &ec : bucket.constraints) {
       std::string firstPass = genEncodingConstraint(
           ctx, getAdaptorSelf(ec.argName), ec.constraint, ec.isOptional);
       os << mlir::tblgen::tgfmt(firstPass.data(), &ctx) << "\n";
@@ -384,9 +329,8 @@ static void genGetEncoding(const mlir::tblgen::Operator &op,
 )",
       className);
 
-  emitArchDispatch(byArch, os, [&](const EncWithConstraints &ewc) {
-    StringRef encodingId =
-        ewc.enc.getEncodedArch().getEncoding().getIdentifier();
+  emitArchDispatch(byArch, os, [&](const EncBucket &bucket) {
+    StringRef encodingId = bucket.encodedArch.getEncoding().getIdentifier();
     os << llvm::formatv(
         R"(    if (::mlir::succeeded(isValid(tgt, ::mlir::aster::amdgcn::Encoding::{0}, _adaptor)))
       return ::mlir::aster::amdgcn::Encoding::{0};

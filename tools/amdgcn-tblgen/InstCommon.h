@@ -218,12 +218,17 @@ struct EncodedArchRecord : public RecordMixin<EncodedArchRecord> {
 struct InstEncRecord : public RecordMixin<InstEncRecord> {
   using Base::Base;
   static constexpr llvm::StringRef ClassType = "InstEnc";
-  /// Get the encoded arch (encoding + architecture pair).
-  EncodedArchRecord getEncodedArch() const {
-    return getDefAs<EncodedArchRecord>("arch");
+  /// Get the encoded archs (encoding + architecture pairs) this encoding
+  /// applies to.
+  SmallVector<EncodedArchRecord> getEncodedArchs() const {
+    return getRecordList<EncodedArchRecord>("archs");
   }
   /// Get the opcode for this encoding.
   int64_t getOpcode() const { return def->getValueAsInt("opcode"); }
+  /// Get the per-encoding type-constraint dag (head is the `pred` marker).
+  const llvm::DagInit *getConstraintsDag() const {
+    return def->getValueAsDag("constraints");
+  }
 };
 
 /// Get the encodings from an AMDISAInstruction record.
