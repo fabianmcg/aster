@@ -36,6 +36,17 @@ static std::string getAdaptorSelf(StringRef name) {
   return buildSelfExpr("adaptor.", "adaptor", name);
 }
 
+/// Like getAdaptorSelf, but returns the raw value expression (without the
+/// `getTypeOrValue` wrap). Bound to `$_selfValue` in constraint condition
+/// templates so they can inspect the underlying value rather than its type.
+static std::string getAdaptorSelfValue(StringRef name) {
+  if (name.empty())
+    return "adaptor";
+  return "adaptor.get" +
+         llvm::convertToCamelFromSnakeCase(name, /*capitalizeFirst=*/true) +
+         "()";
+}
+
 //===----------------------------------------------------------------------===//
 // Encoding constraint analysis
 //===----------------------------------------------------------------------===//
@@ -186,19 +197,26 @@ analyzeOpEncodings(const mlir::tblgen::Operator &op,
 
 /// ctx is taken by value so the caller's context is not mutated. The result
 /// is a first-pass string; the caller applies a second tgfmt pass to expand
-/// $_self tokens emitted by the condition template.
+/// $_self / $_selfValue tokens emitted by the condition template. `_self` is
+/// the operand's type-or-value (suitable for type constraints); `_selfValue`
+/// is the raw adaptor value (suitable when the constraint inspects the value
+/// itself rather than its type).
 static std::string
 genEncodingConstraint(mlir::tblgen::FmtContext ctx, StringRef self,
+                      StringRef selfValue,
                       const mlir::tblgen::Constraint &constraint,
                       bool isOptional, StringRef failureExpr = "false") {
   const std::string_view body = R"(  {
     auto &&_self = $_selfExpr;
+    auto &&_selfValue = $_selfValueExpr;
     (void)_self;
+    (void)_selfValue;
     if ($0!($1))
       return $2;
   })";
   StrStream stream;
   ctx.addSubst("_selfExpr", self);
+  ctx.addSubst("_selfValueExpr", selfValue);
   StringRef optionalStr = isOptional ? "_self && " : "";
   stream.os << mlir::tblgen::tgfmt(body.data(), &ctx,
                                    /*0=*/optionalStr,
@@ -254,6 +272,7 @@ static void genIsValidOpNameFunc(const mlir::tblgen::Operator &op,
                                  raw_ostream &os) {
   mlir::tblgen::FmtContext ctx;
   ctx.withSelf("_self");
+  ctx.addSubst("_selfValue", "_selfValue");
 
   std::string qualClass = op.getQualCppClassName();
   std::string funcName = "isValid" + op.getCppClassName().str();
@@ -269,9 +288,9 @@ static void genIsValidOpNameFunc(const mlir::tblgen::Operator &op,
   emitEncodingArchPairCheck(analysis.byArch, os);
 
   for (const EncodingConstraint &ec : analysis.commonConstraints) {
-    std::string firstPass =
-        genEncodingConstraint(ctx, getAdaptorSelf(ec.argName), ec.constraint,
-                              ec.isOptional, "::mlir::failure()");
+    std::string firstPass = genEncodingConstraint(
+        ctx, getAdaptorSelf(ec.argName), getAdaptorSelfValue(ec.argName),
+        ec.constraint, ec.isOptional, "::mlir::failure()");
     os << mlir::tblgen::tgfmt(firstPass.data(), &ctx) << "\n";
   }
 
@@ -283,7 +302,8 @@ static void genIsValidOpNameFunc(const mlir::tblgen::Operator &op,
     os << "      auto checkEnc = [&] {\n";
     for (const EncodingConstraint &ec : bucket.constraints) {
       std::string firstPass = genEncodingConstraint(
-          ctx, getAdaptorSelf(ec.argName), ec.constraint, ec.isOptional);
+          ctx, getAdaptorSelf(ec.argName), getAdaptorSelfValue(ec.argName),
+          ec.constraint, ec.isOptional);
       os << mlir::tblgen::tgfmt(firstPass.data(), &ctx) << "\n";
     }
     os << "        return true;\n";
