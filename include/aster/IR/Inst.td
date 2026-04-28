@@ -16,11 +16,7 @@
 #define ASTER_IR_INST_TD
 
 include "aster/Interfaces/InstOpInterface.td"
-include "aster/Support/EnumBase.td"
-include "aster/Support/Utils.td"
-include "mlir/IR/CommonAttrConstraints.td"
-include "mlir/IR/CommonTypeConstraints.td"
-include "mlir/IR/OpBase.td"
+include "aster/IR/Util.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
@@ -57,6 +53,13 @@ class ASMString<list<EncodedArch> _archs, string _syntax, Pred _pred = TruePred>
   Pred pred = _pred;
 }
 
+/// Argument assembly format.
+class ASMArgFormat {
+  // Assembly printer code.
+  // Example: `$_printer.printOperand($_self);`
+  code asmPrinter = ?;
+}
+
 //===----------------------------------------------------------------------===//
 // Effects
 //===----------------------------------------------------------------------===//
@@ -74,50 +77,35 @@ class Effect {
 // Operands and modifiers
 //===----------------------------------------------------------------------===//
 
-// An input operand type.
-class InType<list<Type> types> : AnyTypeOf<types, "an input operand">;
-
-// An output operand type.
-class OutType<list<Type> types> : AnyTypeOf<types, "an output operand">;
-
-// An input/output operand type.
-class InOutType<list<Type> types> : AnyTypeOf<types, "an input/output operand">;
-
 // A type that appears in a particular encoding of an instruction.
 class EncType<list<EncodedArch> _archs, Type _type> : TypeAlias<_type> {
   list<EncodedArch> archs = _archs;
 }
 
-// A modifier operand type.
-class ModType<Type _type> : TypeAlias<_type>;
-
-// A modifier attribute.
-class ModAttr<Attr _attr, string _default = ""> : DefaultValuedAttr<_attr, _default> {
+// A const value constraint.
+class ConstValueTypeConstraint {
+  // The predicate for this constraint. It has several special variables available:
+  // `$_self` the value being checked.
+  // `$_strictness` the strictness level of the constraint.
+  Pred constraint;
 }
 
-class UnitModifier<string name, string summary> : ModAttr<UnitAttr, "false">;
+// A modifier attribute.
+class ModAttr<Attr _attr> : PassthroughAttr<_attr>, ASMArgFormat {
+}
+
+// An unit modifier attribute.
+class UnitModifier<string name, string _summary> : ModAttr<UnitAttr> {
+  let summary = _summary;
+  let asmPrinter = StrSubst<[{
+    if ($_self)
+      $_printer.printKeyword($_name);
+  }], [VarRepl<"_name", name>]>.result;
+}
 
 //===----------------------------------------------------------------------===//
 // Instruction base class
 //===----------------------------------------------------------------------===//
-
-/// Helper class to represent an argument.
-class InstOperand<string _n, TypeConstraint _t> {
-  string name = _n;
-  TypeConstraint type = _t;
-
-  // Extract if the argument is optional.
-  bit isOptional = !isa<Optional>(type);
-
-  // Extract if the argument is variadic.
-  bit isVariadic = !isa<Variadic>(type);
-
-  // Extract if the argument is a variadic of a variadic.
-  bit isVariadicOfVariadic = !isa<VariadicOfVariadic>(type);
-
-  // Extract if the argument is optional, variadic, or a variadic of a variadic.
-  bit isOpt = !or(isOptional, isVariadic, isVariadicOfVariadic);
-}
 
 /// Helper class to get the optional type of a type.
 class _GetOptionalType<TypeConstraint type, bit isOpt> {
@@ -128,108 +116,39 @@ class _GetOptionalType<TypeConstraint type, bit isOpt> {
 }
 
 /// Helper class to extract information from a list of dag arguments.
-class InstOperandInfo<dag args> {
-  // Generate indices for the args.
-  list<int> indices = !if(!empty(args),
-    /*true_value=*/[],
-    /*false_value=*/!range(!size(args))
-  );
-
-  // Get the number of arguments.
-  int numArgs = !size(indices);
-
-  // Extract the names of the arguments.
-  list<string> names = !if(!empty(args),
-    /*true_value=*/[],
-    /*false_value=*/!foreach(i, indices, !getdagname(args, i))
-  );
-
-  // Extract the types of the arguments.
-  list<TypeConstraint> types = !if(!empty(args),
-    /*true_value=*/[],
-    /*false_value=*/!foreach(i, indices, !getdagarg<TypeConstraint>(args, i))
-  );
-
-  // Create argument objects.
-  list<InstOperand> argList = !if(!empty(args),
-    /*true_value=*/[],
-    /*false_value=*/!foreach(i, indices, InstOperand<names[i], types[i]>)
-  );
-
-  // Create argument objects with optional types.
-  list<TypeConstraint> typesAsOpt = !if(!empty(argList),
-    /*true_value=*/[],
-    /*false_value=*/!foreach(arg, argList, _GetOptionalType<arg.type, arg.isOpt>.optType)
-  );
-
-  // Extract if the arguments are optional.
-  list<int> isOpt = !if(!empty(argList),
-    /*true_value=*/[],
-    /*false_value=*/!foreach(i, indices, argList[i].isOpt)
-  );
-
-  // Get the number of optional arguments.
-  int numOptArgs = !foldl(0, isOpt, acc, v, !add(v, acc));
-}
-
-/// Helper class to extract information from a dag.
-class InstructionDagInfo<dag args> {
-  // Generate indices for the args.
-  list<int> indices = !if(!empty(args),
-    /*true_value=*/[],
-    /*false_value=*/!range(!size(args))
-  );
-
-  // Extract the types of the arguments.
-  list<bit> isOperand = !if(!empty(args),
-    /*true_value=*/[],
-    /*false_value=*/!foreach(i, indices, !initialized(!getdagarg<TypeConstraint>(args, i)))
-  );
-
-  // The number of leading operands.
-  int numOperands = !if(!empty(args),
-    /*true_value=*/0,
-    /*false_value=*/!foldl(0, isOperand, acc, v, !add(!if(v, 1, 0), acc))
-  );
-}
-
-/// Helper class to extract information from a list of dag arguments.
-class InstructionInfo<dag inputs, dag outputs, dag modifiers> {
-  InstOperandInfo inputsInfo = InstOperandInfo<inputs>;
-  InstOperandInfo outputsInfo = InstOperandInfo<outputs>;
-
-  // Get the number of arguments.
-  int numArgs = !add(inputsInfo.numArgs, outputsInfo.numArgs);
-
-  // Get the number of optional arguments.
-  int numOptArgs = !add(inputsInfo.numOptArgs, outputsInfo.numOptArgs);
+class InstructionTraits<dag arguments, dag results> {
+  OpArgInfo argInfo = OpArgInfo<arguments>;
+  OpArgInfo resInfo = OpArgInfo<results>;
 
   // Determine if the instruction requires attr-sized operand segments.
-  bit requiresAttrSizedOperandSegments = !gt(numOptArgs, 1);
+  bit requiresAttrSizedOperandSegments = !gt(argInfo.numOptOperands, 1);
 
   // Determine if the instruction requires attr-sized result segments.
-  bit requiresAttrSizedResultSegments = !gt(outputsInfo.numArgs, 1);
+  bit requiresAttrSizedResultSegments = !gt(resInfo.numOperands, 1);
 
   // Generate the traits for the instruction.
   list<Trait> traits = !listconcat([],
     !if(requiresAttrSizedOperandSegments, [AttrSizedOperandSegments], []),
     !if(requiresAttrSizedResultSegments, [AttrSizedResultSegments], [])
   );
-
-  // Generate result names by appending "_res" to argument names.
-  list<string> resNames = !foreach(n, outputsInfo.names, n#"_res");
-  dag instResults = !if(!gt(outputsInfo.numArgs, 0),
-    /*true_value=*/!dag(outs, outputsInfo.typesAsOpt, resNames),
-    /*false_value=*/(outs)
-  );
-
-  // The number of modifier arguments.
-  int numModifiers = InstructionDagInfo<modifiers>.numOperands;
-
-  // The number of instruction results.
-  int numInstResults = !size(instResults);
 }
 
+/// Helper class to extract information from a list of dag arguments.
+class InstOutsInfo<dag outputs>  : OpArgInfo<outputs> {
+  // Create argument objects with optional types.
+  list<TypeConstraint> typesAsOpt = !if(!empty(operands),
+    /*true_value=*/[],
+    /*false_value=*/!foreach(_op, operands, _GetOptionalType<_op.type, _op.isOpt>.optType)
+  );
+  // Generate result names by appending "_res" to argument names.
+  list<string> resNames = !foreach(_op, operands, _op.name # "_res");
+  dag instResults = !if(!gt(numOperands, 0),
+    /*true_value=*/!dag(outs, typesAsOpt, resNames),
+    /*false_value=*/(outs)
+  );
+}
+
+// A helper class to represent an instruction.
 class Instruction<Dialect dialect, string mnemonic, list<Trait> opTraits = []>
     : Op<dialect, mnemonic, opTraits> {
   // A list of architectures this instruction is valid for, if empty, then
@@ -245,36 +164,27 @@ class Instruction<Dialect dialect, string mnemonic, list<Trait> opTraits = []>
   dag outputs = (ins);
   // The inputs of the instruction.
   dag inputs = (ins);
-  // The modifiers of the instruction.
-  dag modifiers = (ins);
-  // The instruction operand and result information.
-  InstructionInfo info = InstructionInfo<inputs, outputs, modifiers>;
+  // The trailing arguments of the instruction.
+  dag trailingArgs = (ins);
+  // The trailing results of the instruction.
+  dag trailingResults = (outs);
   // The arguments of the MLIR operation.
-  let arguments = !con(outputs, inputs, modifiers);
-  // Helper with the results of the instruction.
-  dag instResults = info.instResults;
+  let arguments = !con(outputs, inputs, trailingArgs);
+  // The result outputs of the instruction.
+  InstOutsInfo outputsInfo = InstOutsInfo<outputs>;
   // The results of the operation.
-  let results = instResults;
+  let results = !con(outputsInfo.instResults, trailingResults);
+  // The instruction operand and result information.
+  InstructionTraits info = InstructionTraits<inputs, results>;
   let traits = [
     DeclareOpInterfaceMethods<InstOpInterface>,
     DeclareOpInterfaceMethods<InferTypeOpInterface>,
     DeclareOpInterfaceMethods<ConditionallySpeculatable>,
     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
-  ] # opTraits;
+  ] # opTraits # info.traits;
   let assemblyFormat = [{
     operands attr-dict `:` type(operands)
   }];
-}
-
-//===----------------------------------------------------------------------===//
-// Utilities
-//===----------------------------------------------------------------------===//
-
-class CPPType<string cppType, string summary> : Type<TruePred, summary, cppType> {
-  let predicate = CPred<
-    StrSubst<"::llvm::isa<$_type>($_self)", [VarRepl<"_type", cppType>]>.result
-  >;
-  let description = summary;
 }
 
 #endif // ASTER_IR_INST_TD
