@@ -42,10 +42,18 @@
 
 namespace mlir {
 class PatternRewriter;
-}
+namespace aster::amdgcn {
+bool checkFloatConst(Value value, ArrayRef<float> values);
+bool checkIntConst(Value value, ArrayRef<int64_t> values);
+bool checkOffsetConst(Value value, int64_t offsetWidth, bool isSigned = false);
+} // namespace aster::amdgcn
+} // namespace mlir
 
 #define GET_OP_CLASSES
 #include "aster/Dialect/AMDGCN/IR/AMDGCNOps.h.inc"
+
+#define GET_OP_CLASSES
+#include "aster/Dialect/AMDGCN/IR/VMem.h.inc"
 
 #define AMDGCN_GEN_INST_DECLS
 #include "aster/Dialect/AMDGCN/IR/AMDGCNInsts.h.inc"

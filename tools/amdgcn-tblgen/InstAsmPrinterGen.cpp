@@ -326,6 +326,23 @@ static bool generateInstAsmPrinters(const llvm::RecordKeeper &records,
         handler.genPrinter(os);
       },
       "\n");
+
+  // Generate the opcode to printer function table.
+  os << "\nstatic const llvm::SmallVector<"
+        "llvm::function_ref<mlir::LogicalResult(mlir::aster::amdgcn::OpCode, "
+        "mlir::aster::amdgcn::AsmPrinter &, mlir::Operation *)>> "
+        "_instructionPrinters = {\n";
+  os << "  nullptr, // OpCode::Invalid\n";
+
+  // Generate each table entry.
+  llvm::interleave(
+      instRecs, os,
+      [&](const llvm::Record *instRec) {
+        AMDInst inst(instRec);
+        os << "  print" << inst.getName() << ",";
+      },
+      "\n");
+  os << "\n};\n";
   return false;
 }
 

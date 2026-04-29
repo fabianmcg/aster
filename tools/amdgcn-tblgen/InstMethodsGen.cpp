@@ -67,7 +67,7 @@ static void emitConstraintCheck(raw_ostream &os, mlir::tblgen::FmtContext &ctx,
                                 bool isOptional, StringRef failureExpr) {
   const std::string_view body = R"(  {
     auto &&_selfValue = $0;
-    auto &&_self = getTypeOrValue($0;);
+    auto &&_self = getTypeOrValue($0);
     (void)_self;
     (void)_selfValue;
     if ($1!($2))
@@ -189,28 +189,33 @@ static void genIsValidFunc(const mlir::tblgen::Operator &op,
   llvm::SmallVector<StringRef> archOrder = getArchOrder(pairs);
 
   // Function signature.
-  os << llvm::formatv(
-      R"(static ::mlir::LogicalResult {0}(
+  ctx.addSubst("_funcName", funcName);
+  ctx.addSubst("_qualClass", qualClass);
+  const std::string_view sigBody =
+      R"(static ::mlir::LogicalResult $_funcName(
     ::mlir::aster::TargetAttrInterface tgt,
-    ::mlir::aster::Encoding encoding,
-    {1}::Adaptor adaptor) {{
-)",
-      funcName, qualClass);
+    ::mlir::aster::amdgcn::AMDEncoding encoding,
+    $_qualClass::Adaptor adaptor) {
+)";
+  os << mlir::tblgen::tgfmt(sigBody.data(), &ctx);
 
   // Emit the (arch, encoding) pair validity check.
   os << "  auto isValidPair = [&]() -> bool {\n";
   for (StringRef archId : archOrder) {
-    os << llvm::formatv(
-        R"(    if (tgt.getTargetFamily() == ::mlir::aster::TypedEnum::get(::mlir::aster::amdgcn::ISAVersion::{0}))
+    ctx.addSubst("_archId", archId);
+    os << mlir::tblgen::tgfmt(
+        R"(    if (tgt.getTargetFamily() == ::mlir::aster::amdgcn::ISAVersion::$_archId)
       return )",
-        archId);
+        &ctx);
     llvm::interleave(
         llvm::make_filter_range(
             pairs, [&](const ArchEncPair &p) { return p.archId == archId; }),
         os,
         [&](const ArchEncPair &p) {
-          os << llvm::formatv(
-              "encoding == ::mlir::aster::amdgcn::Encoding::{0}", p.encodingId);
+          ctx.addSubst("_encodingId", p.encodingId);
+          os << mlir::tblgen::tgfmt(
+              "encoding == ::mlir::aster::amdgcn::AMDEncoding::$_encodingId",
+              &ctx);
         },
         " || ");
     os << ";\n";
@@ -238,18 +243,22 @@ static void genIsValidFunc(const mlir::tblgen::Operator &op,
 
   // Emit per-arch, per-encoding dispatch.
   for (StringRef archId : archOrder) {
-    os << llvm::formatv(
-        R"(  if (tgt.getTargetFamily() == ::mlir::aster::TypedEnum::get(::mlir::aster::amdgcn::ISAVersion::{0})) {{
+    ctx.addSubst("_archId", archId);
+    os << mlir::tblgen::tgfmt(
+        R"(  if (tgt.getTargetFamily() == ::mlir::aster::amdgcn::ISAVersion::$_archId) {
 )",
-        archId);
+        &ctx);
     for (const ArchEncPair &p : pairs) {
       if (p.archId != archId)
         continue;
       llvm::StringMap<const llvm::Record *> overrides =
           parseEncodingOverrides(p.enc, op);
-      os << llvm::formatv(
-          "    if (encoding == ::mlir::aster::amdgcn::Encoding::{0}) {{\n",
-          p.encodingId);
+      ctx.addSubst("_encodingId", p.encodingId);
+      os << mlir::tblgen::tgfmt(
+          "    if (encoding == "
+          "::mlir::aster::amdgcn::AMDEncoding::$_encodingId) "
+          "{\n",
+          &ctx);
       os << "      auto checkEnc = [&] {\n";
       for (int i = 0, e = op.getNumOperands(); i < e; ++i) {
         const mlir::tblgen::NamedTypeConstraint &operand = op.getOperand(i);
@@ -288,46 +297,53 @@ static void genIsValidFunc(const mlir::tblgen::Operator &op,
 static void genIsValidMethod(const mlir::tblgen::Operator &op,
                              StringRef className, raw_ostream &os) {
   std::string funcName = "isValid" + op.getCppClassName().str();
-  os << llvm::formatv(
+  mlir::tblgen::FmtContext ctx;
+  ctx.addSubst("_className", className);
+  ctx.addSubst("_funcName", funcName);
+  const std::string_view body =
       R"(::mlir::LogicalResult
-{0}::isValid(::mlir::aster::TargetAttrInterface tgt,
-    ::mlir::aster::Encoding encoding,
-    {0}::Adaptor adaptor) {{
-  return {1}(tgt, encoding, adaptor);
+$_className::isValid(::mlir::aster::TargetAttrInterface tgt,
+    ::mlir::aster::amdgcn::AMDEncoding encoding,
+    $_className::Adaptor adaptor) {
+  return $_funcName(tgt, encoding, adaptor);
 }
 
-)",
-      className, funcName);
+)";
+  os << mlir::tblgen::tgfmt(body.data(), &ctx);
 }
 
 static void genGetEncoding(const mlir::tblgen::Operator &op,
                            StringRef className,
                            llvm::ArrayRef<InstEncRecord> encodings,
                            raw_ostream &os) {
+  mlir::tblgen::FmtContext ctx;
+  ctx.addSubst("_className", className);
   llvm::SmallVector<ArchEncPair> pairs = flattenEncodings(encodings);
   llvm::SmallVector<StringRef> archOrder = getArchOrder(pairs);
 
   os << "// Instruction: " << op.getOperationName() << "\n";
-  os << llvm::formatv(
+  const std::string_view sigBody =
       R"(mlir::FailureOr<::mlir::aster::Encoding>
-{0}::getEncoding(::mlir::aster::TargetAttrInterface tgt) {{
+$_className::getEncoding(::mlir::aster::TargetAttrInterface tgt) {
   Adaptor _adaptor(*this);
-)",
-      className);
+)";
+  os << mlir::tblgen::tgfmt(sigBody.data(), &ctx);
 
   for (StringRef archId : archOrder) {
-    os << llvm::formatv(
-        R"(  if (tgt.getTargetFamily() == ::mlir::aster::TypedEnum::get(::mlir::aster::amdgcn::ISAVersion::{0})) {{
+    ctx.addSubst("_archId", archId);
+    os << mlir::tblgen::tgfmt(
+        R"(  if (tgt.getTargetFamily() == ::mlir::aster::amdgcn::ISAVersion::$_archId) {
 )",
-        archId);
+        &ctx);
     for (const ArchEncPair &p : pairs) {
       if (p.archId != archId)
         continue;
-      os << llvm::formatv(
-          R"(    if (::mlir::succeeded(isValid(tgt, ::mlir::aster::amdgcn::Encoding::{0}, _adaptor)))
-      return ::mlir::aster::amdgcn::Encoding::{0};
+      ctx.addSubst("_encodingId", p.encodingId);
+      os << mlir::tblgen::tgfmt(
+          R"(    if (::mlir::succeeded(isValid(tgt, ::mlir::aster::amdgcn::AMDEncoding::$_encodingId, _adaptor)))
+      return mlir::aster::Encoding::get(::mlir::aster::amdgcn::AMDEncoding::$_encodingId);
 )",
-          p.encodingId);
+          &ctx);
     }
     os << R"(    return ::mlir::failure();
   }
@@ -338,15 +354,16 @@ static void genGetEncoding(const mlir::tblgen::Operator &op,
 
 static void genGetEffects(const mlir::tblgen::Operator &op, StringRef className,
                           raw_ostream &os) {
-  os << llvm::formatv(
-      R"(void {0}::getEffects(
-    ::llvm::SmallVectorImpl<::mlir::SideEffects::EffectInstance<::mlir::MemoryEffects::Effect>> &effects) {{
-)",
-      className);
-
   mlir::tblgen::FmtContext ctx;
+  ctx.withSelf("(*this)");
+  ctx.addSubst("_className", className);
   ctx.addSubst("_op", "(*this)");
   ctx.addSubst("_effects", "effects");
+  const std::string_view sigBody =
+      R"(void $_className::getEffects(
+    ::llvm::SmallVectorImpl<::mlir::SideEffects::EffectInstance<::mlir::MemoryEffects::Effect>> &effects) {
+)";
+  os << mlir::tblgen::tgfmt(sigBody.data(), &ctx);
   const llvm::ListInit *effectsList = op.getDef().getValueAsListInit("effects");
   for (const llvm::Init *init : effectsList->getElements()) {
     const llvm::Record *effectRec = cast<llvm::DefInit>(init)->getDef();
@@ -364,29 +381,31 @@ static void genGetEffects(const mlir::tblgen::Operator &op, StringRef className,
 static void genInferReturnTypes(const mlir::tblgen::Operator &op,
                                 StringRef className, raw_ostream &os) {
   int numOutputs = getNumOutputs(op);
+  mlir::tblgen::FmtContext ctx;
+  ctx.addSubst("_className", className);
 
-  os << llvm::formatv(
-      R"(::llvm::LogicalResult {0}::inferReturnTypes(
+  const std::string_view sigBody =
+      R"(::llvm::LogicalResult $_className::inferReturnTypes(
     ::mlir::MLIRContext *context, ::std::optional<::mlir::Location> location,
     ::mlir::ValueRange operands, ::mlir::DictionaryAttr attributes,
     ::mlir::PropertyRef properties, ::mlir::RegionRange regions,
-    ::llvm::SmallVectorImpl<::mlir::Type> &inferredReturnTypes) {{
-  {0}::Adaptor adaptor(operands, attributes, properties, regions);
-)",
-      className);
+    ::llvm::SmallVectorImpl<::mlir::Type> &inferredReturnTypes) {
+  $_className::Adaptor adaptor(operands, attributes, properties, regions);
+)";
+  os << mlir::tblgen::tgfmt(sigBody.data(), &ctx);
 
   for (int i = 0; i < numOutputs; ++i) {
-    os << llvm::formatv(
-        R"(  {{
-    auto [_start, _size] = adaptor.getODSOperandIndexAndLength({0});
-    for (::mlir::Type _ty : ::mlir::TypeRange(operands.slice(_start, _size))) {{
+    os << mlir::tblgen::tgfmt(
+        R"(  {
+    auto [_start, _size] = adaptor.getODSOperandIndexAndLength($0);
+    for (::mlir::Type _ty : ::mlir::TypeRange(operands.slice(_start, _size))) {
       auto _regTy = ::llvm::dyn_cast<::mlir::aster::RegisterTypeInterface>(_ty);
       if (_regTy && _regTy.hasValueSemantics())
         inferredReturnTypes.push_back(_ty);
     }
   }
 )",
-        i);
+        &ctx, /*0=*/std::to_string(i));
   }
   os << "  return ::mlir::success();\n}\n\n";
 }
@@ -395,25 +414,28 @@ static void genGetInstInfo(const mlir::tblgen::Operator &op,
                            StringRef className, raw_ostream &os) {
   int numOutputs = getNumOutputs(op);
   int numInputs = getNumInputs(op);
+  mlir::tblgen::FmtContext ctx;
+  ctx.addSubst("_className", className);
 
-  os << llvm::formatv(
-      R"(::mlir::aster::InstOpInfo {0}::getInstInfo() {{
+  const std::string_view sigBody =
+      R"(::mlir::aster::InstOpInfo $_className::getInstInfo() {
   int32_t numInstOuts = 0;
-)",
-      className);
+)";
+  os << mlir::tblgen::tgfmt(sigBody.data(), &ctx);
   for (int i = 0; i < numOutputs; ++i)
-    os << llvm::formatv(
-        "  numInstOuts += std::get<1>(getODSOperandIndexAndLength({0}));\n", i);
+    os << mlir::tblgen::tgfmt(
+        "  numInstOuts += std::get<1>(getODSOperandIndexAndLength($0));\n",
+        &ctx, /*0=*/std::to_string(i));
   os << "  int32_t numInstIns = 0;\n";
   for (int i = 0; i < numInputs; ++i)
-    os << llvm::formatv(
-        "  numInstIns += std::get<1>(getODSOperandIndexAndLength({0}));\n",
-        numOutputs + i);
+    os << mlir::tblgen::tgfmt(
+        "  numInstIns += std::get<1>(getODSOperandIndexAndLength($0));\n", &ctx,
+        /*0=*/std::to_string(numOutputs + i));
   os << "  int32_t numInstResults = 0;\n";
   for (int i = 0; i < numOutputs; ++i)
-    os << llvm::formatv(
-        "  numInstResults += std::get<1>(getODSResultIndexAndLength({0}));\n",
-        i);
+    os << mlir::tblgen::tgfmt(
+        "  numInstResults += std::get<1>(getODSResultIndexAndLength($0));\n",
+        &ctx, /*0=*/std::to_string(i));
   os << R"(  return ::mlir::aster::InstOpInfo(
       /*numLeadingOperands=*/0, numInstOuts, numInstIns,
       /*numLeadingResults=*/0, numInstResults);

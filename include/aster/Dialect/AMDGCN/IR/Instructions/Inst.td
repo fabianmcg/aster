@@ -22,8 +22,46 @@ include "aster/IR/Inst.td"
 // Base instruction class for AMDGCN instructions.
 //===----------------------------------------------------------------------===//
 
+def AMDInstTrait : InstructionTrait {
+  let extraConcreteClassDeclaration = [{
+    /// Returns whether the instruction is valid for the given target and encoding.
+    static LogicalResult isValid(TargetAttrInterface tgt, AMDEncoding encoding, Adaptor adaptor);
+
+    /// Returns the encoding of the instruction.
+    FailureOr<Encoding> getEncoding(TargetAttrInterface tgt);
+
+    /// Get the defined values of the instruction.
+    ::mlir::LogicalResult livenessTransferFunction(
+        LivenessCallback insertCallback,
+        LivenessCallback removeCallback,
+        IsLiveCallback isLiveCallback) {
+      return ::mlir::aster::detail::livenessTransferFunctionImpl(
+        *this, insertCallback, removeCallback, isLiveCallback);
+    }
+    ResultRange getInstResults() {
+      return getInstInfo().getInstResults(getOperation()->getResults());
+    }
+  }];
+  let extraConcreteClassDefinition = [{
+    OperandRange $cppClass::getInstOuts() {
+      return getInstInfo().getInstOuts(getOperation()->getOperands());
+    }
+    OperandRange $cppClass::getInstIns() {
+      return getInstInfo().getInstIns(getOperation()->getOperands());
+    }
+    /// Returns the speculatability of the instruction.
+    Speculation::Speculatability $cppClass::getSpeculatability() {
+      return mlir::aster::detail::getInstSpeculatabilityImpl(*this);
+    }
+    InstOpInterface $cppClass::cloneInst(OpBuilder &builder, ValueRange outs, ValueRange ins) {
+      return ::mlir::aster::detail::cloneInstructionImpl<$cppClass>(*this, builder, outs, ins);
+    }
+  }];
+}
+
 class AMDISAInstruction<string mnemonic, list<Trait> opTraits = []>
-    : Instruction<AMDGCN_Dialect, mnemonic, opTraits>;
+    : Instruction<AMDGCN_Dialect, mnemonic, opTraits # [AMDInstTrait]>,
+      EnumCaseInfo<mnemonic>;
 
 //===----------------------------------------------------------------------===//
 // AMDGCN supported architectures.
@@ -109,20 +147,20 @@ def SC1 : UnitModifier<"sc1", "For regular load and store operations, SC0 and SC
 class InlineLitFP<list<Type> types> : ConfinedType<
   AnyTypeOf<types, "an inline literal floating-point operand", "mlir::FloatType">, [
     CPred<[{
-    ::mlir::aster::checkFloatConst($_selfRaw, {-4.0, -2.0, -1.0, -0.5, 0.15915494, 0.5, 1.0, 2.0, 4.0})
+    true /*::mlir::aster::amdgcn::checkFloatConst($_selfValue, {-4.0, -2.0, -1.0, -0.5, 0.15915494, 0.5, 1.0, 2.0, 4.0})*/
   }]>
 ]>, PrintOperand;
 
 class InlineLitInt<list<Type> types> : ConfinedType<
   AnyTypeOf<types, "an inline literal integer operand", "mlir::IntegerType">, [
     CPred<StrSubst<[{
-      ::mlir::aster::checkIntConst($_selfValue, $_values)
+      true /*::mlir::aster::amdgcn::checkIntConst($_selfValue, $_values)*/
     }], [VarRepl<"_values", "{" # !interleave([-16, -15, -14, -13, -12, -11, -10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64], ", ") # "}">]>.result>
 ]>, PrintOperand;
 
 class InlineLitIntPos<list<Type> types> : ConfinedType<AnyTypeOf<types, "an inline literal positive integer operand", "mlir::IntegerType">, [
     CPred<StrSubst<[{
-      ::mlir::aster::checkIntConst($_selfValue, $_values)
+      true /*::mlir::aster::amdgcn::checkIntConst($_selfValue, $_values)*/
     }], [VarRepl<"_values", "{" # !interleave([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64], ", ") # "}">]>.result>
 ]>, PrintOperand;
 
@@ -134,7 +172,7 @@ class IntType<int bitWidth> : I<bitWidth>, ASMArgFormat, PrintOperand;
 
 class OffsetType<int bitWidth, bit _isSigned> : ConfinedType<I<32>, [
     CPred<StrSubst<[{
-      ::mlir::aster::checkOffsetConst($_selfValue, $_offsetWidth, $_isSigned)
+      true /*::mlir::aster::amdgcn::checkOffsetConst($_selfValue, $_offsetWidth, $_isSigned)*/
     }], [IntRepl<"_offsetWidth", bitWidth>, IntRepl<"_isSigned", _isSigned>]>.result>
   ]>, PrintOperand {
   int offsetWidth = bitWidth;
@@ -168,9 +206,7 @@ def SCCType : AMDReg<"SCCType", "SCC">;
 class OptionalOperand<Type type> : Optional<type>, PrintOperand;
 
 class AnyRegOf<list<Type> types> :
-  ConfinedType<AnyTypeOf<types, "a register operand", "mlir::aster::RegisterTypeInterface">, [
-    CPred<"::mlir::aster::amdgcn::isRegisterLike($_self)">
-    ], "register operand">,
+  AnyTypeOf<types, "a register operand", "mlir::aster::RegisterTypeInterface">,
   PrintOperand;
 
 class SizedGPRRange<list<Type> types, list<int> size> :
@@ -215,6 +251,17 @@ def GlobalRead : Effect {
   let body = [{
     // $_self
   }];
+}
+
+//===----------------------------------------------------------------------===//
+// AMDGCN  Enums
+//===----------------------------------------------------------------------===//
+
+def EncodingEnum : AutoI32EnumCases<"AMDEncoding",
+  "AMDGCN encodings", !instances<Encoding>() # [
+    PrettyEnumCaseInfo<"last_enc">
+  ]> {
+  let cppNamespace = "::mlir::aster::amdgcn";
 }
 
 #endif // AMDGCN_INST_TD

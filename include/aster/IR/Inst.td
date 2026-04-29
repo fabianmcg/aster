@@ -145,6 +145,11 @@ class InstOutsInfo<dag outputs>  : OpArgInfo<outputs> {
   );
 }
 
+/// Trait to provide instruction operand and result information.
+class InstructionTrait : NativeOpTrait<"InstructionTrait"> {
+  let cppNamespace = "::mlir::aster";
+}
+
 // A helper class to represent an instruction.
 class Instruction<Dialect dialect, string mnemonic, list<Trait> opTraits = []>
     : Op<dialect, mnemonic, opTraits> {
