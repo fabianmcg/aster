@@ -287,6 +287,20 @@ struct AsmVariant : public RecordMixin<AsmVariant> {
   StringRef getAsmFormat() const { return getStringRef("asmFormat"); }
 };
 
+/// AMDGCN instruction assembly syntax string.
+struct ASMStringRecord : public RecordMixin<ASMStringRecord> {
+  using Base::Base;
+  static constexpr llvm::StringRef ClassType = "ASMString";
+
+  /// Get the list of encoded archs this syntax applies to.
+  SmallVector<EncodedArchRecord> getArchs() const {
+    return getRecordList<EncodedArchRecord>("archs");
+  }
+
+  /// Get the assembly syntax format string.
+  StringRef getSyntax() const { return getStringRef("syntax"); }
+};
+
 /// AMDGCN instruction definition.
 struct AMDInst : public RecordMixin<AMDInst> {
   AMDInst(llvm::Record const *def)
