@@ -55,7 +55,7 @@ public:
   }
   template <typename EnumTy, std::enable_if_t<is_valid_enum_v<EnumTy>, int> = 0>
   TypedEnum &operator=(EnumTy value) {
-    this->value = reinterpret_cast<int64_t>(value);
+    this->value = static_cast<int64_t>(value);
     this->typeID = mlir::TypeID::get<EnumTy>();
     return *this;
   }
@@ -68,8 +68,7 @@ public:
   /// Create a TypedEnum from a specific enum value.
   template <typename EnumTy, std::enable_if_t<is_valid_enum_v<EnumTy>, int> = 0>
   static TypedEnum get(EnumTy value) {
-    return TypedEnum(reinterpret_cast<int64_t>(value),
-                     mlir::TypeID::get<EnumTy>());
+    return TypedEnum(static_cast<int64_t>(value), mlir::TypeID::get<EnumTy>());
   }
 
   bool operator==(const TypedEnum &other) const {

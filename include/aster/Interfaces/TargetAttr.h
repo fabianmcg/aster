@@ -21,13 +21,15 @@
 
 namespace mlir::aster {
 /// Identifies a specific compilation target.
-struct Target : TypedEnum {
+struct TargetArch : TypedEnum {
   using TypedEnum::TypedEnum;
+  using TypedEnum::operator=;
 };
 
 /// Identifies a family of compilation targets.
 struct TargetFamily : TypedEnum {
   using TypedEnum::TypedEnum;
+  using TypedEnum::operator=;
 };
 
 /// Identifies a target encoding for an instruction.

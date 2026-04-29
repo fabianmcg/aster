@@ -29,7 +29,7 @@ def TargetAttrInterface : AttrInterface<"TargetAttrInterface"> {
   let methods = [
     InterfaceMethod<
       "Get the specific target.",
-      "::mlir::aster::Target", "getTarget"
+      "::mlir::aster::TargetArch", "getTarget"
     >,
     InterfaceMethod<
       "Get the target family.",
