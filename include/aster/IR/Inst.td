@@ -63,6 +63,10 @@ class ASMArgFormat {
   code asmPrinter = ?;
 }
 
+class PrintOperand : ASMArgFormat {
+  let asmPrinter = "$_printer.printOperand($_self);";
+}
+
 //===----------------------------------------------------------------------===//
 // Effects
 //===----------------------------------------------------------------------===//
@@ -81,15 +85,7 @@ class Effect {
 //===----------------------------------------------------------------------===//
 
 // A type constraint that checks if the operand is of any of the specified types.
-class AnyOperandOf<list<Type> types> : AnyTypeOf<types>;
-
-// A const value constraint.
-class ConstValueTypeConstraint {
-  // The predicate for this constraint. It has several special variables available:
-  // `$_self` the value being checked.
-  // `$_strictness` the strictness level of the constraint.
-  Pred constraint;
-}
+class AnyOperandOf<list<Type> types> : AnyTypeOf<types>, PrintOperand;
 
 // A modifier attribute.
 class ModAttr<Attr _attr> : PassthroughAttr<_attr>, ASMArgFormat {

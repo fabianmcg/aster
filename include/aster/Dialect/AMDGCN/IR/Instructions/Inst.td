@@ -111,34 +111,34 @@ class InlineLitFP<list<Type> types> : ConfinedType<
     CPred<[{
     ::mlir::aster::checkFloatConst($_selfRaw, {-4.0, -2.0, -1.0, -0.5, 0.15915494, 0.5, 1.0, 2.0, 4.0})
   }]>
-]>;
+]>, PrintOperand;
 
 class InlineLitInt<list<Type> types> : ConfinedType<
   AnyTypeOf<types, "an inline literal integer operand", "mlir::IntegerType">, [
     CPred<StrSubst<[{
       ::mlir::aster::checkIntConst($_selfValue, $_values)
     }], [VarRepl<"_values", "{" # !interleave([-16, -15, -14, -13, -12, -11, -10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64], ", ") # "}">]>.result>
-]>;
+]>, PrintOperand;
 
-class InlineLitIntPos<list<Type> types> : AnyTypeOf<types, "an inline literal positive integer operand", "mlir::IntegerType">, ConstValueTypeConstraint {
-  list<int> values = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64];
-  let constraint = CPred<StrSubst<[{
-    ::mlir::aster::checkIntConst($_self, $_values)
-  }], [VarRepl<"_value", "{" # !interleave(values, ", ") # "}">]>.result>;
-}
+class InlineLitIntPos<list<Type> types> : ConfinedType<AnyTypeOf<types, "an inline literal positive integer operand", "mlir::IntegerType">, [
+    CPred<StrSubst<[{
+      ::mlir::aster::checkIntConst($_selfValue, $_values)
+    }], [VarRepl<"_values", "{" # !interleave([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64], ", ") # "}">]>.result>
+]>, PrintOperand;
 
 //===----------------------------------------------------------------------===//
 // Integer type constraint.
 //===----------------------------------------------------------------------===//
 
-class IntType<int bitWidth> : I<bitWidth>;
+class IntType<int bitWidth> : I<bitWidth>, ASMArgFormat, PrintOperand;
 
-class OffsetType<int bitWidth, bit _isSigned> : I<32>, ConstValueTypeConstraint {
+class OffsetType<int bitWidth, bit _isSigned> : ConfinedType<I<32>, [
+    CPred<StrSubst<[{
+      ::mlir::aster::checkOffsetConst($_self, $_offsetWidth, $_isSigned)
+    }], [IntRepl<"_offsetWidth", bitWidth>, IntRepl<"_isSigned", _isSigned>]>.result>
+  ]>, PrintOperand {
   int offsetWidth = bitWidth;
   bit isSigned = _isSigned;
-  let constraint = CPred<StrSubst<[{
-    ::mlir::aster::checkOffsetConst($_self, $_strictness, $_offsetWidth)
-  }], [IntRepl<"_offsetWidth", offsetWidth>]>.result>;
 }
 
 //===----------------------------------------------------------------------===//
@@ -146,8 +146,8 @@ class OffsetType<int bitWidth, bit _isSigned> : I<32>, ConstValueTypeConstraint 
 //===----------------------------------------------------------------------===//
 
 class AMDReg<string cppType, string name> :
-  CPPType<"::mlir::aster::amdgcn::" # cppType, "register of type: " # name> {
-}
+  CPPType<"::mlir::aster::amdgcn::" # cppType, "register of type: " # name>,
+  PrintOperand;
 
 def AGPRType : AMDReg<"AGPRType", "AGPR">;
 def VGPRType : AMDReg<"VGPRType", "VGPR">;
@@ -164,39 +164,42 @@ def VCCZType : AMDReg<"VCCZType", "VCCZ">;
 def EXECZType : AMDReg<"EXECZType", "EXECZ">;
 def SCCType : AMDReg<"SCCType", "SCC">;
 
-class AnyRegOf<list<Type> types> : AnyTypeOf<types, "a register operand", "mlir::aster::RegisterTypeInterface">;
+class AnyRegOf<list<Type> types> :
+  ConfinedType<AnyTypeOf<types, "a register operand", "mlir::aster::RegisterTypeInterface">, [
+    CPred<"::mlir::aster::amdgcn::isRegisterLike($_self)">
+    ], "register operand">,
+  PrintOperand;
 
 class SizedGPRRange<list<Type> types, list<int> size> :
   ConfinedType<AnyRegOf<types>, [
     CPred<"::mlir::aster::amdgcn::hasSize($_self, {" # !interleave(size, ", ") # "})">
-  ], "sized GPR range"> {
-}
+  ], "sized GPR range">, PrintOperand;
 
 class AGPROf<int numRegs> : SizedGPRRange<[AGPRType], [numRegs]>;
 class SGPROf<int numRegs> : SizedGPRRange<[SGPRType], [numRegs]>;
 class VGPROf<int numRegs> : SizedGPRRange<[VGPRType], [numRegs]>;
 
-class OneGPROrSRegOrConstOf<Type litType, Type dataType> : AnyTypeOf<[VGPROf<1>, SGPROf<1>, VCCLoType, VCCHiType, M0Type, EXECLoType, EXECHiType, VCCZType, EXECZType, SCCType, litType, dataType]>;
+class OneGPROrSRegOrConstOf<Type litType, Type dataType> : AnyOperandOf<[VGPROf<1>, SGPROf<1>, VCCLoType, VCCHiType, M0Type, EXECLoType, EXECHiType, VCCZType, EXECZType, SCCType, litType, dataType]>;
 class OneGPROrSRegOrLitOf<Type litType> : AnyRegOf<[VGPROf<1>, SGPROf<1>, VCCLoType, VCCHiType, M0Type, EXECLoType, EXECHiType, VCCZType, EXECZType, SCCType, litType]>;
-class OneGPROrVCCM0OrFPConstOf<Type floatLit, Type fpConst> : AnyTypeOf<[VGPROf<1>, SGPROf<1>, VCCLoType, VCCHiType, M0Type, VCCZType, EXECZType, SCCType, floatLit, fpConst]>;
-class OneGPROrVCCM0OrFPLitOf<Type floatLit> : AnyTypeOf<[VGPROf<1>, SGPROf<1>, VCCLoType, VCCHiType, M0Type, VCCZType, EXECZType, SCCType, floatLit]>;
-class OneSGPROrSRegOrIntConstOf<Type intLit, Type intConst> : AnyTypeOf<[SGPROf<1>, VCCLoType, VCCHiType, M0Type, EXECLoType, EXECHiType, VCCZType, EXECZType, SCCType, intLit, intConst]>;
-class OneSGPROrSRegOrLitConstOf<Type floatLit, Type intLit, Type fpConst, Type intConst> : AnyTypeOf<[SGPROf<1>, VCCLoType, VCCHiType, M0Type, EXECLoType, EXECHiType, VCCZType, EXECZType, SCCType, floatLit, intLit, fpConst, intConst]>;
+class OneGPROrVCCM0OrFPConstOf<Type floatLit, Type fpConst> : AnyOperandOf<[VGPROf<1>, SGPROf<1>, VCCLoType, VCCHiType, M0Type, VCCZType, EXECZType, SCCType, floatLit, fpConst]>;
+class OneGPROrVCCM0OrFPLitOf<Type floatLit> : AnyOperandOf<[VGPROf<1>, SGPROf<1>, VCCLoType, VCCHiType, M0Type, VCCZType, EXECZType, SCCType, floatLit]>;
+class OneSGPROrSRegOrIntConstOf<Type intLit, Type intConst> : AnyOperandOf<[SGPROf<1>, VCCLoType, VCCHiType, M0Type, EXECLoType, EXECHiType, VCCZType, EXECZType, SCCType, intLit, intConst]>;
+class OneSGPROrSRegOrLitConstOf<Type floatLit, Type intLit, Type fpConst, Type intConst> : AnyOperandOf<[SGPROf<1>, VCCLoType, VCCHiType, M0Type, EXECLoType, EXECHiType, VCCZType, EXECZType, SCCType, floatLit, intLit, fpConst, intConst]>;
 class TwoGPROrSRegOrConstOf<Type litType, Type intConst> : AnyRegOf<[VGPROf<2>, SGPROf<2>, VCCType, EXECType, VCCZType, EXECZType, SCCType, litType, intConst]>;
-class TwoGPROrVCCOrFPLitOf<Type floatLit> : AnyTypeOf<[VGPROf<2>, SGPROf<2>, VCCType, VCCZType, EXECZType, SCCType, floatLit]>;
+class TwoGPROrVCCOrFPLitOf<Type floatLit> : AnyOperandOf<[VGPROf<2>, SGPROf<2>, VCCType, VCCZType, EXECZType, SCCType, floatLit]>;
 class VGPROrAGPROf<int numRegs> : AnyRegOf<[VGPROf<numRegs>, AGPROf<numRegs>]>;
 class VGPROrAGPROrLitOf<int numRegs, Type litType> : AnyRegOf<[VGPROf<numRegs>, AGPROf<numRegs>, litType]>;
 
-def OneGPROrSRegOrConstType : AnyTypeOf<[VGPROf<1>, SGPROf<1>, VCCLoType, VCCHiType, M0Type, EXECLoType, EXECHiType, VCCZType, EXECZType, SCCType, IntType<32>, InlineLitInt<[IntType<32>]>, InlineLitFP<[F32]>, F32]>;
+def OneGPROrSRegOrConstType : AnyOperandOf<[VGPROf<1>, SGPROf<1>, VCCLoType, VCCHiType, M0Type, EXECLoType, EXECHiType, VCCZType, EXECZType, SCCType, IntType<32>, InlineLitInt<[IntType<32>]>, InlineLitFP<[F32]>, F32]>;
 def OneSGPROrSRegType : AnyRegOf<[SGPROf<1>, VCCLoType, VCCHiType, M0Type, EXECLoType, EXECHiType]>;
-def OneSGPROrVCCM0OrIntLitType : AnyTypeOf<[SGPROf<1>, VCCLoType, VCCHiType, M0Type, InlineLitIntPos<[IntType<32>]>]>;
+def OneSGPROrVCCM0OrIntLitType : AnyOperandOf<[SGPROf<1>, VCCLoType, VCCHiType, M0Type, InlineLitIntPos<[IntType<32>]>]>;
 def OneSGPROrVCCM0Type : AnyRegOf<[SGPROf<1>, VCCLoType, VCCHiType, M0Type]>;
 def OneSGPROrVCCType : AnyRegOf<[SGPROf<1>, VCCLoType, VCCHiType]>;
-def TwoGPROrSRegOrIntLitType : AnyTypeOf<[VGPROf<2>, SGPROf<2>, VCCType, EXECType, VCCZType, EXECZType, SCCType, InlineLitInt<[IntType<64>]>]>;
-def TwoGPROrVCCOrFPConstType : AnyTypeOf<[VGPROf<2>, SGPROf<2>, VCCType, VCCZType, EXECZType, SCCType, F64, InlineLitFP<[F64]>]>;
-def TwoSGPROrSRegOrConstType : AnyTypeOf<[SGPROf<2>, VCCType, EXECType, VCCZType, EXECZType, SCCType, IntType<64>, InlineLitInt<[IntType<64>]>, InlineLitFP<[F64]>, F64]>;
-def TwoSGPROrSRegOrIntConstType : AnyTypeOf<[SGPROf<2>, VCCType, EXECType, VCCZType, EXECZType, SCCType, IntType<64>, InlineLitInt<[IntType<64>]>]>;
-def TwoSGPROrSRegOrLitType : AnyTypeOf<[SGPROf<2>, VCCType, EXECType, VCCZType, EXECZType, SCCType, InlineLitInt<[IntType<64>]>, InlineLitFP<[F64]>]>;
+def TwoGPROrSRegOrIntLitType : AnyOperandOf<[VGPROf<2>, SGPROf<2>, VCCType, EXECType, VCCZType, EXECZType, SCCType, InlineLitInt<[IntType<64>]>]>;
+def TwoGPROrVCCOrFPConstType : AnyOperandOf<[VGPROf<2>, SGPROf<2>, VCCType, VCCZType, EXECZType, SCCType, F64, InlineLitFP<[F64]>]>;
+def TwoSGPROrSRegOrConstType : AnyOperandOf<[SGPROf<2>, VCCType, EXECType, VCCZType, EXECZType, SCCType, IntType<64>, InlineLitInt<[IntType<64>]>, InlineLitFP<[F64]>, F64]>;
+def TwoSGPROrSRegOrIntConstType : AnyOperandOf<[SGPROf<2>, VCCType, EXECType, VCCZType, EXECZType, SCCType, IntType<64>, InlineLitInt<[IntType<64>]>]>;
+def TwoSGPROrSRegOrLitType : AnyOperandOf<[SGPROf<2>, VCCType, EXECType, VCCZType, EXECZType, SCCType, InlineLitInt<[IntType<64>]>, InlineLitFP<[F64]>]>;
 def TwoSGPROrSRegType : AnyRegOf<[SGPROf<2>, VCCType, EXECType]>;
 def TwoSGPROrVCCType : AnyRegOf<[SGPROf<2>, VCCType]>;
 
@@ -206,7 +209,9 @@ def TwoSGPROrVCCType : AnyRegOf<[SGPROf<2>, VCCType]>;
 
 def GlobalRead : Effect {
   let summary = "Reads from global memory.";
-  let body = [{}];
+  let body = [{
+    // $_self
+  }];
 }
 
 #endif // AMDGCN_INST_TD
