@@ -224,8 +224,9 @@ def _stratified_sample(
 def add_scheduling_axes(grid: SweepGrid, unroll_multipliers: Optional[Sequence[int]] = None) -> SweepGrid:
     """Add the common scheduling flag axes shared across sweeps.
 
-    Adds: lcm_unroll, unroll_mult, epilogue_peeling, ll_sched, hoist_wait.
-    Also adds the constraint that unroll_mult > 1 requires lcm_unroll=True.
+    Adds: lcm_unroll, unroll_mult, epilogue_peeling, ll_sched, hoist_wait,
+    rotate_compute_stage. Also adds the constraint that unroll_mult > 1
+    requires lcm_unroll=True.
     """
     if unroll_multipliers is None:
         unroll_multipliers = [1, 2, 3]
@@ -234,8 +235,38 @@ def add_scheduling_axes(grid: SweepGrid, unroll_multipliers: Optional[Sequence[i
     grid.axis("epilogue_peeling", [True, False])
     grid.axis("ll_sched", [True, False])
     grid.axis("hoist_wait", [True, False])
+    grid.axis("rotate_compute_stage", [True, False])
     grid.filter("lcm_unroll", "unroll_mult", check=lambda d: d["lcm_unroll"] or d["unroll_mult"] == 1)
     return grid
+
+
+# Sweep-axis -> GemmMappingSpec kwarg. Centralizes the contract between the
+# sweep harness and GemmMappingSpec so that pinning works end-to-end across
+# every bench_perf script. If a bench adds a new axis whose value must reach
+# GemmMappingSpec, add it here in one place rather than threading a new field
+# through every _build_instance.
+_SWEEP_TO_MAPPING_KWARG = {
+    "lcm_unroll": "lcm_unroll",
+    "unroll_mult": "unroll_factor_multiplier",
+    "epilogue_peeling": "epilogue_peeling",
+    "ll_sched": "ll_sched",
+    "hoist_wait": "hoist_wait",
+    "lds_at_write": "lds_at_write",
+    "set_mfma_priority": "set_mfma_priority",
+    "rotate_compute_stage": "rotate_compute_stage",
+}
+
+
+def mapping_kwargs_from_sweep(d: dict) -> dict:
+    """Forward every relevant sweep-axis value into GemmMappingSpec kwargs.
+
+    Any axis NOT present in d is omitted, letting GemmMappingSpec fall
+    back to its dataclass default. Every bench_perf MUST forward this
+    dict into GemmMappingSpec(**kwargs, **mapping_kwargs_from_sweep(d))
+    so pins reach the compiled config -- otherwise a pin like
+    --hoist-wait silently serializes as hoistwait=0 in the label.
+    """
+    return {mapping_kwarg: d[axis] for axis, mapping_kwarg in _SWEEP_TO_MAPPING_KWARG.items() if axis in d}
 
 
 # -- GPU hardware constants --------------------------------------------------
@@ -342,8 +373,7 @@ def fits_on_cu_post_compile(
     est_a = mm.estimated_agprs()
     return (
         f"occupancy: est(lds={est_lds}, v={est_v}, a={est_a}) "
-        f"vs actual(lds={res.lds_bytes}, v={res.vgpr_count}, a={res.agpr_count}) -- "
-        + "; ".join(violations)
+        f"vs actual(lds={res.lds_bytes}, v={res.vgpr_count}, a={res.agpr_count}) -- " + "; ".join(violations)
     )
 
 
@@ -553,6 +583,7 @@ GEMM_SWEEP_PIN_MAP = {
     "ll_sched": "ll_sched",
     "hoist_wait": "hoist_wait",
     "set_mfma_priority": "set_mfma_priority",
+    "rotate_compute_stage": "rotate_compute_stage",
 }
 
 
@@ -703,6 +734,12 @@ def add_geometry_pin_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--hoist-wait", action=argparse.BooleanOptionalAction, default=None, help="Pin hoist iter_arg waits"
+    )
+    parser.add_argument(
+        "--rotate-compute-stage",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Pin rotate_stage derived from pipeline strategy compute stage",
     )
     parser.add_argument("--desired-simd-occupancy", type=int, default=None, help="Pin SIMD occupancy")
     parser.add_argument("--direct-b", action=argparse.BooleanOptionalAction, default=None, help="B via preshuffle")
