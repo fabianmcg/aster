@@ -277,22 +277,33 @@ static bool generateInstPrinters(const llvm::RecordKeeper &records,
       },
       "\n");
 
-  // Generate the opcode to printer function table.
-  os << "\nstatic const llvm::SmallVector<"
-        "llvm::function_ref<mlir::LogicalResult(mlir::aster::amdgcn::OpCode, "
-        "mlir::aster::amdgcn::AsmPrinter &, mlir::Operation *)>> "
-        "_instPrinters = {\n";
-  os << "  nullptr, // OpCode::Invalid\n";
+  // Generate the opcode-to-printer function table, indexed by OpCode value.
+  // Use explicit indexing to handle gaps from non-AMDInst OpCode entries.
+  os << R"(
+static llvm::SmallVector<
+    llvm::function_ref<mlir::LogicalResult(mlir::aster::amdgcn::OpCode,
+                                           mlir::aster::amdgcn::AsmPrinter &,
+                                           mlir::Operation *)>>
+initInstPrinters() {
+  llvm::SmallVector<
+      llvm::function_ref<mlir::LogicalResult(mlir::aster::amdgcn::OpCode,
+                                             mlir::aster::amdgcn::AsmPrinter &,
+                                             mlir::Operation *)>>
+      table(static_cast<size_t>(
+                mlir::aster::amdgcn::OpCode::LastOpCode),
+            nullptr);
+)";
+  for (const llvm::Record *instRec : instRecs) {
+    AMDInst inst(instRec);
+    os << "  table[static_cast<size_t>(::mlir::aster::amdgcn::OpCode::"
+       << inst.getAsEnumCase().getIdentifier() << ")] = print" << inst.getName()
+       << ";\n";
+  }
+  os << R"(  return table;
+}
 
-  // Generate each table entry.
-  llvm::interleave(
-      instRecs, os,
-      [&](const llvm::Record *instRec) {
-        AMDInst inst(instRec);
-        os << "  print" << inst.getName() << ",";
-      },
-      "\n");
-  os << "\n};\n";
+static const auto _instPrinters = initInstPrinters();
+)";
   return false;
 }
 

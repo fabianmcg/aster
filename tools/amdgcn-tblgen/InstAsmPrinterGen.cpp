@@ -139,7 +139,7 @@ void ASMPrinterHandler::emitMnemonicInterpolation(
     suffix += lexer.currentChar();
     lexer.consumeChar();
   }
-  os << "$_printer.printMnemonic(\"" << instOp.getOpName() << suffix
+  os << "auto _grd = $_printer.printMnemonic(\"" << instOp.getOpName() << suffix
      << "\");\n";
 }
 
@@ -405,22 +405,26 @@ static bool generateInstAsmPrinters(const llvm::RecordKeeper &records,
       },
       "\n");
 
-  // Generate the opcode to printer function table.
-  os << "\nstatic const llvm::SmallVector<"
-        "llvm::function_ref<mlir::LogicalResult(mlir::aster::amdgcn::OpCode, "
-        "mlir::aster::amdgcn::AsmPrinter &, mlir::Operation *)>> "
-        "_instructionPrinters = {\n";
-  os << "  nullptr, // OpCode::Invalid\n";
-
-  // Generate each table entry.
-  llvm::interleave(
-      instRecs, os,
-      [&](const llvm::Record *instRec) {
-        InstOp inst(instRec);
-        os << "  print" << inst.getCppClassName() << ",";
-      },
-      "\n");
-  os << "\n};\n";
+  // Generate the TypeSwitch-based dispatch function.
+  os << R"(
+static ::mlir::LogicalResult printISAInstruction(
+    ::mlir::aster::amdgcn::AsmPrinter &printer,
+    ::mlir::aster::TargetAttrInterface tgt,
+    ::mlir::Operation *op) {
+  return ::llvm::TypeSwitch<::mlir::Operation *, ::mlir::LogicalResult>(op)
+)";
+  for (const llvm::Record *instRec : instRecs) {
+    InstOp inst(instRec);
+    os << "    .Case<" << inst.getQualCppClassName() << ">([&](auto) {\n";
+    os << "      return print" << inst.getCppClassName()
+       << "(printer, tgt, op);\n";
+    os << "    })\n";
+  }
+  os << R"(    .Default([](::mlir::Operation *op) {
+      return op->emitError("no ISA printer for instruction");
+    });
+}
+)";
   return false;
 }
 

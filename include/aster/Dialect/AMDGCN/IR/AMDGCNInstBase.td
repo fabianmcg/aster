@@ -45,6 +45,19 @@ def AMDInstTrait : InstructionTrait {
 
     /// Returns the instruction properties.
     static const ::mlir::aster::amdgcn::InstructionProps *getInstProps();
+
+    ::mlir::aster::amdgcn::InstAttr getOpcodeAttr() {
+      return nullptr;
+    }
+
+    bool hasInstProps(ArrayRef<InstProp> props, bool all) {
+      const InstructionProps *instProps = getInstProps();
+      return instProps ? instProps->hasProps(props) : false;
+    }
+
+    bool isNewInst() {
+      return true;
+    }
   }];
   let extraConcreteClassDefinition = [{
     OperandRange $cppClass::getInstOuts() {
@@ -64,15 +77,18 @@ def AMDInstTrait : InstructionTrait {
 }
 
 class AMDISAInstruction<string mnemonic, list<Trait> opTraits = []>
-    : Instruction<AMDGCN_Dialect, mnemonic, opTraits # [AMDInstTrait]>, AMDInstOpCode<mnemonic, mnemonic> {
+    : Instruction<AMDGCN_Dialect, mnemonic, opTraits # [
+        AMDInstTrait,
+        AMDGCNInstOpInterface,
+      ]>, AMDInstOpCode<"_" # mnemonic, "_" # mnemonic> {
   list<InstProp> props = [];
   code instExtraClassDeclaration = "";
   code opcodeDecl = StrSubst<[{
-    ::mlir::aster::amdgcn::OpCode getOpCode() const {
-      return ::mlir::aster::amdgcn::OpCode::$mnemonic;
+    ::mlir::aster::amdgcn::OpCode getOpCode() {
+      return ::mlir::aster::amdgcn::OpCode::_$mnemonic;
     }
   }], [VarRepl<"mnemonic", mnemonic>]>.result;
-  let extraClassDecls = [instExtraClassDeclaration];
+  let extraClassDecls = [opcodeDecl, instExtraClassDeclaration];
 }
 
 //===----------------------------------------------------------------------===//

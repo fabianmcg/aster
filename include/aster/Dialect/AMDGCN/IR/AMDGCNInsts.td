@@ -35,7 +35,7 @@ def InstPropEnum : AutoI32EnumCases<"InstProp",
 }
 
 def OpCodeEnum : AutoI64EnumCases<"OpCode", "AMDGCN Operation Codes",
-    [InvalidCase] # !instances<AMDInst>() # [
+    [InvalidCase] # !instances<AMDInstOpCode>() # [
       PrettyEnumCaseInfo<"last_op_code">
     ]
   > {
