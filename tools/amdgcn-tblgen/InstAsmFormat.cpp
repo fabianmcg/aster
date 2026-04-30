@@ -34,11 +34,11 @@ struct ASMFormatHandler {
   void genPrinter(raw_ostream &os);
 
 private:
-  using ArgTy = std::optional<std::pair<DagArg, AsmArgFormat>>;
+  using ArgTy = std::optional<std::pair<DagArg, ASMArgFormat>>;
   /// Emit the code to print the given variant.
   void emitVariant(AsmVariant variant, mlir::raw_indented_ostream &os);
   /// Emit the code to print the given argument.
-  void emitArg(DagArg dagArg, AsmArgFormat arg, mlir::raw_indented_ostream &os);
+  void emitArg(DagArg dagArg, ASMArgFormat arg, mlir::raw_indented_ostream &os);
   /// Emit the custom syntax at the current lexer position.
   LogicalResult emitCustomSyntax(Lexer &lexer, mlir::raw_indented_ostream &os);
   /// Emit an error message.
@@ -57,16 +57,16 @@ ASMFormatHandler::ASMFormatHandler(const AMDInst &inst) : inst(inst) {
   // Collect the arguments.
   for (auto [i, arg] : llvm::enumerate(args.getAsRange())) {
     opArgs.insert(arg.getName());
-    if (!AsmArgFormat::isa(arg.getAsRecord()))
+    if (!ASMArgFormat::isa(arg.getAsRecord()))
       continue;
-    arguments[arg.getName()] = {arg, AsmArgFormat(arg.getAsRecord())};
+    arguments[arg.getName()] = {arg, ASMArgFormat(arg.getAsRecord())};
   }
   // Collect the successors.
   for (auto [i, succ] : llvm::enumerate(successors.getAsRange())) {
     opArgs.insert(succ.getName());
-    if (!AsmArgFormat::isa(succ.getAsRecord()))
+    if (!ASMArgFormat::isa(succ.getAsRecord()))
       continue;
-    arguments[succ.getName()] = {succ, AsmArgFormat(succ.getAsRecord())};
+    arguments[succ.getName()] = {succ, ASMArgFormat(succ.getAsRecord())};
   }
   // Populate the format context.
   populateFmtContext(inst, ctx);
@@ -75,7 +75,7 @@ ASMFormatHandler::ASMFormatHandler(const AMDInst &inst) : inst(inst) {
   ctx.addSubst("_printer", "printer");
 }
 
-void ASMFormatHandler::emitArg(DagArg dagArg, AsmArgFormat arg,
+void ASMFormatHandler::emitArg(DagArg dagArg, ASMArgFormat arg,
                                mlir::raw_indented_ostream &os) {
   ctx.withSelf("_inst.get" +
                llvm::convertToCamelFromSnakeCase(dagArg.getName(), true) +
@@ -173,12 +173,12 @@ void ASMFormatHandler::emitVariant(AsmVariant variant,
 
       // Lookup the argument.
       ArgTy argumentsIt = arguments.lookup(*id);
-      // Check if the argument derives from `AsmArgFormat`.
+      // Check if the argument derives from `ASMArgFormat`.
       if (!argumentsIt.has_value()) {
         if (opArgs.contains(*id)) {
           llvm::PrintFatalError(
               &inst.getDef(),
-              "argument in asm format doesn't derive from `AsmArgFormat`: " +
+              "argument in asm format doesn't derive from `ASMArgFormat`: " +
                   *id);
           return;
         }

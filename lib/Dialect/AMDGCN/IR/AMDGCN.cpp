@@ -71,6 +71,20 @@ static void printOpcode(OpAsmPrinter &printer, Operation *, InstAttr opcode) {
   printer << stringifyOpCode(opcode.getValue());
 }
 
+/// Helper to get either the type of a Value or return the type itself.
+template <typename T, std::enable_if_t<std::is_base_of_v<Value, T>, int> = 0>
+static auto getTypeOrValue(T value) {
+  using Type = decltype(value.getType());
+  if (value == nullptr)
+    return Type();
+  return value.getType();
+}
+/// Helper to passthrough values that are not MLIR Values.
+template <typename T, std::enable_if_t<!std::is_base_of_v<Value, T>, int> = 0>
+static T &&getTypeOrValue(T &&value) {
+  return std::forward<T>(value);
+}
+
 //===----------------------------------------------------------------------===//
 // DimAttr Parsing/Printing
 //===----------------------------------------------------------------------===//
@@ -299,6 +313,9 @@ void AMDGCNDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
 #include "aster/Dialect/AMDGCN/IR/AMDGCNOps.cpp.inc"
+      ,
+#define GET_OP_LIST
+#include "aster/Dialect/AMDGCN/IR/VMem.cpp.inc"
       >();
   addTypes<
 #define GET_TYPEDEF_LIST
@@ -1570,3 +1587,9 @@ inferTypesImpl(MLIRContext *ctx, std::optional<Location> &loc,
 
 #define GET_OP_CLASSES
 #include "aster/Dialect/AMDGCN/IR/AMDGCNOps.cpp.inc"
+
+#define GET_OP_CLASSES
+#include "aster/Dialect/AMDGCN/IR/VMem.cpp.inc"
+
+#define AMDGCN_GEN_INST_METHODS
+#include "aster/Dialect/AMDGCN/IR/VMemInst.cpp.inc"

@@ -17,7 +17,7 @@
 
 include "aster/Dialect/AMDGCN/IR/AMDGCNDialect.td"
 include "aster/Dialect/AMDGCN/IR/AMDGCNAttrs.td"
-include "aster/Dialect/AMDGCN/IR/AMDGCNTypes.td"
+include "aster/Dialect/AMDGCN/IR/AMDGCNTypeConstraints.td"
 include "aster/Dialect/AMDGCN/IR/AMDGCNEnums.td"
 include "aster/IR/CommonProps.td"
 include "aster/Dialect/AMDGCN/IR/AMDGCNVerifiers.td"
