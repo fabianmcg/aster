@@ -109,10 +109,12 @@ class AsmVariant<Pred pred, code format> {
   code asmFormat = format;
 }
 
+class AMDInstOpCode<string sym, string id = ""> : EnumCaseInfo<sym, id>;
+
 /// AMDGCN instruction definition.
 class AMDInst<string _mnemonic, string sym, InstOp _instOp, list<ISAVersion> _isa,
               list<InstProp> _props = []>
-    : EnumCaseInfo<sym, ""> {
+    : AMDInstOpCode<sym, ""> {
   // The summary description of the instruction.
   code summary = "AMDGCN instruction `" # _mnemonic # "`.";
   code description = summary;

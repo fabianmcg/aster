@@ -64,9 +64,14 @@ def AMDInstTrait : InstructionTrait {
 }
 
 class AMDISAInstruction<string mnemonic, list<Trait> opTraits = []>
-    : Instruction<AMDGCN_Dialect, mnemonic, opTraits # [AMDInstTrait]> {
+    : Instruction<AMDGCN_Dialect, mnemonic, opTraits # [AMDInstTrait]>, AMDInstOpCode<mnemonic, mnemonic> {
   list<InstProp> props = [];
   code instExtraClassDeclaration = "";
+  code opcodeDecl = StrSubst<[{
+    ::mlir::aster::amdgcn::OpCode getOpCode() const {
+      return ::mlir::aster::amdgcn::OpCode::$mnemonic;
+    }
+  }], [VarRepl<"mnemonic", mnemonic>]>.result;
   let extraClassDecls = [instExtraClassDeclaration];
 }
 

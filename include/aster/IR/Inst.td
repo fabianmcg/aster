@@ -152,8 +152,7 @@ class InstructionTrait : NativeOpTrait<"InstructionTrait"> {
 
 // A helper class to represent an instruction.
 class Instruction<Dialect dialect, string mnemonic, list<Trait> opTraits = []>
-    : Op<dialect, mnemonic, opTraits>,
-      EnumCaseInfo<mnemonic> {
+    : Op<dialect, mnemonic, opTraits> {
   // A list of architectures this instruction is valid for, if empty, then
   // it's valid for all architectures.
   list<Arch> archs = [];
