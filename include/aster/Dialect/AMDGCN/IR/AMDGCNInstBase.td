@@ -42,6 +42,9 @@ def AMDInstTrait : InstructionTrait {
     ResultRange getInstResults() {
       return getInstInfo().getInstResults(getOperation()->getResults());
     }
+
+    /// Returns the instruction properties.
+    static const ::mlir::aster::amdgcn::InstructionProps *getInstProps();
   }];
   let extraConcreteClassDefinition = [{
     OperandRange $cppClass::getInstOuts() {
@@ -71,8 +74,8 @@ class AMDISAInstruction<string mnemonic, list<Trait> opTraits = []>
 // AMDGCN supported architectures.
 //===----------------------------------------------------------------------===//
 
-def CDNA3 : Arch<"CDNA3">;
-def CDNA4 : Arch<"CDNA4">;
+def CDNA3Isa : Arch<"CDNA3">;
+def CDNA4Isa : Arch<"CDNA4">;
 
 //===----------------------------------------------------------------------===//
 // Encoding name records
@@ -99,37 +102,37 @@ def VOP3P_MFMA : Encoding<"vop3p_mfma">;
 // EncodedArch records
 //===----------------------------------------------------------------------===//
 
-def ENC_DS_CDNA3 : EncodedArch<ENC_DS, CDNA3>;
-def ENC_DS_CDNA4 : EncodedArch<ENC_DS, CDNA4>;
-def ENC_FLAT_GLBL_CDNA3 : EncodedArch<ENC_FLAT_GLBL, CDNA3>;
-def ENC_FLAT_GLBL_CDNA4 : EncodedArch<ENC_FLAT_GLBL, CDNA4>;
-def ENC_MUBUF_CDNA3 : EncodedArch<ENC_MUBUF, CDNA3>;
-def ENC_MUBUF_CDNA4 : EncodedArch<ENC_MUBUF, CDNA4>;
-def ENC_SMEM_CDNA3 : EncodedArch<ENC_SMEM, CDNA3>;
-def ENC_SMEM_CDNA4 : EncodedArch<ENC_SMEM, CDNA4>;
-def ENC_SOP1_CDNA3 : EncodedArch<ENC_SOP1, CDNA3>;
-def ENC_SOP1_CDNA4 : EncodedArch<ENC_SOP1, CDNA4>;
-def ENC_SOP2_CDNA3 : EncodedArch<ENC_SOP2, CDNA3>;
-def ENC_SOP2_CDNA4 : EncodedArch<ENC_SOP2, CDNA4>;
-def ENC_SOPC_CDNA3 : EncodedArch<ENC_SOPC, CDNA3>;
-def ENC_SOPC_CDNA4 : EncodedArch<ENC_SOPC, CDNA4>;
-def ENC_SOPK_CDNA3 : EncodedArch<ENC_SOPK, CDNA3>;
-def ENC_SOPK_CDNA4 : EncodedArch<ENC_SOPK, CDNA4>;
-def ENC_SOPP_CDNA3 : EncodedArch<ENC_SOPP, CDNA3>;
-def ENC_SOPP_CDNA4 : EncodedArch<ENC_SOPP, CDNA4>;
-def ENC_VOP1_CDNA3 : EncodedArch<ENC_VOP1, CDNA3>;
-def ENC_VOP1_CDNA4 : EncodedArch<ENC_VOP1, CDNA4>;
-def ENC_VOP2_CDNA3 : EncodedArch<ENC_VOP2, CDNA3>;
-def ENC_VOP2_CDNA4 : EncodedArch<ENC_VOP2, CDNA4>;
-def ENC_VOP3PX2_CDNA4 : EncodedArch<ENC_VOP3PX2, CDNA4>;
-def ENC_VOP3P_CDNA3 : EncodedArch<ENC_VOP3P, CDNA3>;
-def ENC_VOP3P_CDNA4 : EncodedArch<ENC_VOP3P, CDNA4>;
-def ENC_VOP3_CDNA3 : EncodedArch<ENC_VOP3, CDNA3>;
-def ENC_VOP3_CDNA4 : EncodedArch<ENC_VOP3, CDNA4>;
-def ENC_VOPC_CDNA3 : EncodedArch<ENC_VOPC, CDNA3>;
-def ENC_VOPC_CDNA4 : EncodedArch<ENC_VOPC, CDNA4>;
-def VOP3P_MFMA_CDNA3 : EncodedArch<VOP3P_MFMA, CDNA3>;
-def VOP3P_MFMA_CDNA4 : EncodedArch<VOP3P_MFMA, CDNA4>;
+def ENC_DS_CDNA3 : EncodedArch<ENC_DS, CDNA3Isa>;
+def ENC_DS_CDNA4 : EncodedArch<ENC_DS, CDNA4Isa>;
+def ENC_FLAT_GLBL_CDNA3 : EncodedArch<ENC_FLAT_GLBL, CDNA3Isa>;
+def ENC_FLAT_GLBL_CDNA4 : EncodedArch<ENC_FLAT_GLBL, CDNA4Isa>;
+def ENC_MUBUF_CDNA3 : EncodedArch<ENC_MUBUF, CDNA3Isa>;
+def ENC_MUBUF_CDNA4 : EncodedArch<ENC_MUBUF, CDNA4Isa>;
+def ENC_SMEM_CDNA3 : EncodedArch<ENC_SMEM, CDNA3Isa>;
+def ENC_SMEM_CDNA4 : EncodedArch<ENC_SMEM, CDNA4Isa>;
+def ENC_SOP1_CDNA3 : EncodedArch<ENC_SOP1, CDNA3Isa>;
+def ENC_SOP1_CDNA4 : EncodedArch<ENC_SOP1, CDNA4Isa>;
+def ENC_SOP2_CDNA3 : EncodedArch<ENC_SOP2, CDNA3Isa>;
+def ENC_SOP2_CDNA4 : EncodedArch<ENC_SOP2, CDNA4Isa>;
+def ENC_SOPC_CDNA3 : EncodedArch<ENC_SOPC, CDNA3Isa>;
+def ENC_SOPC_CDNA4 : EncodedArch<ENC_SOPC, CDNA4Isa>;
+def ENC_SOPK_CDNA3 : EncodedArch<ENC_SOPK, CDNA3Isa>;
+def ENC_SOPK_CDNA4 : EncodedArch<ENC_SOPK, CDNA4Isa>;
+def ENC_SOPP_CDNA3 : EncodedArch<ENC_SOPP, CDNA3Isa>;
+def ENC_SOPP_CDNA4 : EncodedArch<ENC_SOPP, CDNA4Isa>;
+def ENC_VOP1_CDNA3 : EncodedArch<ENC_VOP1, CDNA3Isa>;
+def ENC_VOP1_CDNA4 : EncodedArch<ENC_VOP1, CDNA4Isa>;
+def ENC_VOP2_CDNA3 : EncodedArch<ENC_VOP2, CDNA3Isa>;
+def ENC_VOP2_CDNA4 : EncodedArch<ENC_VOP2, CDNA4Isa>;
+def ENC_VOP3PX2_CDNA4 : EncodedArch<ENC_VOP3PX2, CDNA4Isa>;
+def ENC_VOP3P_CDNA3 : EncodedArch<ENC_VOP3P, CDNA3Isa>;
+def ENC_VOP3P_CDNA4 : EncodedArch<ENC_VOP3P, CDNA4Isa>;
+def ENC_VOP3_CDNA3 : EncodedArch<ENC_VOP3, CDNA3Isa>;
+def ENC_VOP3_CDNA4 : EncodedArch<ENC_VOP3, CDNA4Isa>;
+def ENC_VOPC_CDNA3 : EncodedArch<ENC_VOPC, CDNA3Isa>;
+def ENC_VOPC_CDNA4 : EncodedArch<ENC_VOPC, CDNA4Isa>;
+def VOP3P_MFMA_CDNA3 : EncodedArch<VOP3P_MFMA, CDNA3Isa>;
+def VOP3P_MFMA_CDNA4 : EncodedArch<VOP3P_MFMA, CDNA4Isa>;
 
 //===----------------------------------------------------------------------===//
 // Modifier attribute constraints

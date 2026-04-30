@@ -18,7 +18,6 @@
 #include "mlir/IR/BuiltinAttributes.h"
 
 #include "aster/Dialect/AMDGCN/IR/AMDGCNEnums.h.inc"
-#include "aster/Dialect/AMDGCN/IR/InstEnums.h.inc"
 
 namespace mlir::aster::amdgcn {
 /// Helper to check if the address space kind matches any of the given kinds.

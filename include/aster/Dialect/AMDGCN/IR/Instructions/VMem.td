@@ -16,11 +16,12 @@
 #define AMDGCN_VMEM_TD
 
 include "aster/Dialect/AMDGCN/IR/AMDGCNInstBase.td"
+include "aster/Dialect/AMDGCN/IR/AMDGCN.td"
 
 #ifndef GLOBALLOADINST_DEF
 #define GLOBALLOADINST_DEF
 class GlobalLoadInst<string mnemonic, list<Type> dstType> : AMDISAInstruction<mnemonic> {
-  let archs = [CDNA3, CDNA4];
+  let archs = [CDNA3Isa, CDNA4Isa];
   let effects = [GlobalRead];
   let outputs = (ins
     AnyRegOf<dstType>:$dst
@@ -41,6 +42,7 @@ class GlobalLoadInst<string mnemonic, list<Type> dstType> : AMDISAInstruction<mn
     ASMString<[ENC_FLAT_GLBL_CDNA4], "${mnemonic} $dst, $addr, off [offset] [sc0] [sc1] [nt]", CPred<"$_self.getSaddr() == nullptr">>,
     ASMString<[ENC_FLAT_GLBL_CDNA4], "${mnemonic} $dst, $addr, $saddr [offset] [sc0] [sc1] [nt]">
   ];
+  let props = [IsVMem, IsFlat, IsGlobal];
 }
 #endif // GLOBALLOADINST_DEF
 
@@ -96,7 +98,7 @@ def GlobalLoadDwordx4 : GlobalLoadInst<"global_load_dwordx4",
 #ifndef VOP2OUT1IN2INST_DEF
 #define VOP2OUT1IN2INST_DEF
 class VOP2Out1In2Inst<string mnemonic, list<Type> dstType, list<Type> src0Type, list<Type> src1Type> : AMDISAInstruction<mnemonic> {
-  let archs = [CDNA3, CDNA4];
+  let archs = [CDNA3Isa, CDNA4Isa];
   let outputs = (ins
     AnyRegOf<dstType>:$dst
   );
@@ -114,7 +116,7 @@ class VOP2Out1In2Inst<string mnemonic, list<Type> dstType, list<Type> src0Type, 
 
 #ifndef VADDU32_DEF
 #define VADDU32_DEF
-def VAddU32 : VOP2Out1In2Inst<"v_add_u32",
+def VAddU32D : VOP2Out1In2Inst<"v_add_u32",
     /*dst=*/[VGPROf<1>],
     /*src0=*/[OneGPROrSRegOrConstOf<InlineLitInt<[IntType<32>]>, IntType<32>>,
              OneGPROrSRegOrLitOf<InlineLitInt<[IntType<32>]>>],

@@ -14,6 +14,8 @@
 include "aster/Dialect/AMDGCN/IR/AMDGCNInstBase.td"
 include "aster/Dialect/AMDGCN/IR/Instructions/VMem.td"
 
+include "aster/Dialect/AMDGCN/IR/AMDGCNOps.td"
+
 //===----------------------------------------------------------------------===//
 // AMDGCN  Enums
 //===----------------------------------------------------------------------===//
@@ -25,10 +27,18 @@ def EncodingEnum : AutoI32EnumCases<"AMDGCNEncoding",
   let cppNamespace = "::mlir::aster::amdgcn";
 }
 
-def OpCodeEnum : AutoI32EnumCases<"AMDGCNOpCode",
-  "AMDGCN op codes", !instances<AMDISAInstruction>() # [
-    PrettyEnumCaseInfo<"last_op_code">
+def InstPropEnum : AutoI32EnumCases<"InstProp",
+  "AMDGCN instruction properties", !instances<InstProp>() # [
+    PrettyEnumCaseInfo<"last_prop">
   ]> {
+  let cppNamespace = "::mlir::aster::amdgcn";
+}
+
+def OpCodeEnum : AutoI64EnumCases<"OpCode", "AMDGCN Operation Codes",
+    [InvalidCase] # !instances<AMDInst>() # [
+      PrettyEnumCaseInfo<"last_op_code">
+    ]
+  > {
   let cppNamespace = "::mlir::aster::amdgcn";
 }
 

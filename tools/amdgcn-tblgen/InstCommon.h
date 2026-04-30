@@ -375,6 +375,11 @@ struct InstOp : public RecordMixin<InstOp> {
   /// Get the number of trailing argument SSA operands (excludes attrs).
   int getNumTrailingArgOperands() const;
 
+  /// Get the list of instruction properties.
+  SmallVector<InstProp> getInstProps() const {
+    return getRecordList<InstProp>("props");
+  }
+
 private:
   Operator op;
 };

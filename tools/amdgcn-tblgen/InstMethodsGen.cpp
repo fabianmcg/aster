@@ -882,6 +882,27 @@ static void genGetInstInfo(const InstOp &instOp, StringRef className,
 )";
 }
 
+static void genGetInstProps(const InstOp &instOp, StringRef className,
+                            raw_ostream &os) {
+  mlir::tblgen::FmtContext ctx;
+  ctx.addSubst("_className", className);
+  llvm::SmallVector<InstProp> props = instOp.getInstProps();
+  os << mlir::tblgen::tgfmt(
+      R"(const ::mlir::aster::amdgcn::InstructionProps *
+$_className::getInstProps() {
+  static ::mlir::aster::amdgcn::InstructionProps props({)",
+      &ctx);
+  llvm::interleaveComma(props, os, [&](const InstProp &prop) {
+    os << "::mlir::aster::amdgcn::InstProp::"
+       << prop.getAsEnumCase().getIdentifier();
+  });
+  os << R"(});
+  return &props;
+}
+
+)";
+}
+
 //===----------------------------------------------------------------------===//
 // Top-level generators
 //===----------------------------------------------------------------------===//
@@ -901,6 +922,7 @@ static void genInstMethods(const llvm::Record *rec, raw_ostream &os) {
   genGetEffects(instOp, className, os);
   genInferReturnTypes(instOp, className, os);
   genGetInstInfo(instOp, className, os);
+  genGetInstProps(instOp, className, os);
 
   if (instOp.getGenInstAssemblyFormat()) {
     InstSegments segs = collectInstSegments(instOp);
