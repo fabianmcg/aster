@@ -8,7 +8,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file defines aster register semantics.
+// This file defines aster register semantics and properties.
 //
 //===----------------------------------------------------------------------===//
 
@@ -26,6 +26,20 @@ def RegisterSemantics : AutoI8EnumCases<"RegisterSemantics",
     PrettyEnumCaseInfo<"allocated">,
     PrettyEnumCaseInfo<"unallocated">,
     PrettyEnumCaseInfo<"value">,
+  ]> {
+  let cppNamespace = "::mlir::aster";
+}
+
+//===----------------------------------------------------------------------===//
+// Aster register properties.
+//===----------------------------------------------------------------------===//
+
+def RegisterProps : I8BitEnum<"RegisterProps",
+  "Register type properties", [
+    I8BitEnumCaseNone<"None", "none">,
+    I8BitEnumCase<"GeneralPurpose", 1, "general_purpose">,
+    I8BitEnumCase<"AllowsRanges", 2, "allows_ranges">,
+    I8BitEnumCase<"IsComposite", 4, "is_composite">
   ]> {
   let cppNamespace = "::mlir::aster";
 }

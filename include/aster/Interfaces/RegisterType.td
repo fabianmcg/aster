@@ -46,6 +46,29 @@ def RegisterTypeInterface : TypeInterface<"RegisterTypeInterface", [
         This method returns the size in bits of the register(s).
       }],
       "int64_t", "getSizeInBits"
+    >,
+    InterfaceMethod<[{
+        Returns the properties of the register type.
+      }],
+      "::mlir::aster::RegisterProps", "getProps"
+    >,
+    InterfaceMethod<[{
+        Makes a register range from this register type. `size` must be >= 2.
+        `alignment` must be 0 (natural alignment) or positive. If `emitError`
+        is provided, the implementation may emit a diagnostic on failure.
+        Returns nullptr on failure; callers must check the result.
+      }],
+      "::mlir::aster::RegisterTypeInterface", "makeRange",
+      (ins "int16_t":$size, "int16_t":$alignment,
+           "::llvm::function_ref<::mlir::InFlightDiagnostic()>":$emitError)
+    >,
+    InterfaceMethod<[{
+        Splits a register range into its constituent parts. If `emitError` is
+        provided, the implementation can use it to emit diagnostics.
+      }],
+      "::mlir::LogicalResult", "splitRange",
+      (ins "::llvm::SmallVectorImpl<::mlir::aster::RegisterTypeInterface> &":$regs,
+           "::llvm::function_ref<::mlir::InFlightDiagnostic()>":$emitError)
     >
   ];
   let extraTraitClassDeclaration = [{
@@ -93,6 +116,11 @@ def RegisterTypeInterface : TypeInterface<"RegisterTypeInterface", [
     /// register as the base of the range.
     ::mlir::aster::RegisterTypeInterface cloneRegisterType(::mlir::aster::Register reg) const {
       return $_type.cloneRegisterType(::mlir::aster::RegisterRange(reg, 1));
+    }
+
+    /// Convenience overload that defaults emitError to nullptr.
+    ::mlir::aster::RegisterTypeInterface makeRange(int16_t size, int16_t alignment) const {
+      return $_type.makeRange(size, alignment, nullptr);
     }
   }];
 }

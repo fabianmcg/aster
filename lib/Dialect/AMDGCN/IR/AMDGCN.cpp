@@ -224,7 +224,7 @@ void AMDGCNDialect::printAttribute(Attribute attr,
 //===----------------------------------------------------------------------===//
 
 bool mlir::aster::amdgcn::isRegisterLike(Type type) {
-  auto regType = dyn_cast<RegisterTypeInterface>(type);
+  auto regType = dyn_cast<AMDGCNRegisterTypeInterface>(type);
   if (!regType)
     return false;
 
@@ -339,10 +339,10 @@ LogicalResult MakeRegisterRangeOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
     DictionaryAttr attributes, PropertyRef properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
-  // Fail if there are no operands.
-  if (operands.empty()) {
+  // Fail if there are fewer than two operands.
+  if (operands.size() < 2) {
     if (location)
-      mlir::emitError(*location) << "expected at least one operand";
+      mlir::emitError(*location) << "expected at least two operands";
     return failure();
   }
 
@@ -369,23 +369,12 @@ LogicalResult MakeRegisterRangeOp::inferReturnTypes(
     return failure();
   }
 
-  // Create the appropriate register range type.
-  auto makeRange = [&](RegisterRange range) -> Type {
-    switch (getRegisterKind(fTy)) {
-    case RegisterKind::SGPR:
-      return SGPRType::get(context, range);
-    case RegisterKind::VGPR:
-      return VGPRType::get(context, range);
-    case RegisterKind::AGPR:
-      return AGPRType::get(context, range);
-    default:
-      llvm_unreachable("nyi register kind");
-    }
-  };
-
   if (!fTy.hasAllocatedSemantics()) {
-    inferredReturnTypes.push_back(
-        makeRange(RegisterRange(fTy.getAsRange().begin(), operands.size())));
+    int16_t size = static_cast<int16_t>(operands.size());
+    RegisterTypeInterface result = fTy.makeRange(size, defaultAlignment(size));
+    if (!result)
+      return failure();
+    inferredReturnTypes.push_back(result);
     return success();
   }
 
@@ -418,8 +407,12 @@ LogicalResult MakeRegisterRangeOp::inferReturnTypes(
       return failure();
     }
   }
-  inferredReturnTypes.push_back(
-      makeRange(RegisterRange(Register(lb), operands.size())));
+
+  int16_t size = static_cast<int16_t>(operands.size());
+  RegisterTypeInterface result = fTy.makeRange(size, defaultAlignment(size));
+  if (!result)
+    return failure();
+  inferredReturnTypes.push_back(result);
   return success();
 }
 
@@ -451,29 +444,19 @@ LogicalResult SplitRegisterRangeOp::inferReturnTypes(
   }
 
   Type inputType = operands[0].getType();
-  auto rangeType = cast<AMDGCNRegisterTypeInterface>(inputType);
+  RegisterTypeInterface rangeType = cast<RegisterTypeInterface>(inputType);
 
-  // Get the range information.
-  RegisterRange range = rangeType.getAsRange();
-  int size = range.size();
+  auto emitErrorLambda = [&]() { return mlir::emitError(*location); };
+  llvm::function_ref<InFlightDiagnostic()> emitError = nullptr;
+  if (location)
+    emitError = emitErrorLambda;
 
-  // Create a function to make individual register types.
-  auto makeRegister = [&](Register reg) -> Type {
-    return rangeType.cloneRegisterType(reg);
-  };
+  SmallVector<RegisterTypeInterface> regs;
+  if (failed(rangeType.splitRange(regs, emitError)))
+    return failure();
 
-  // If the range doesn't have allocated semantics, create individual registers.
-  if (!rangeType.hasAllocatedSemantics()) {
-    for (int i = 0; i < size; ++i)
-      inferredReturnTypes.push_back(makeRegister(range.begin()));
-    return success();
-  }
-
-  // Otherwise, create individual registers from the range.
-  int begin = range.begin().getRegister();
-  for (int i = 0; i < size; ++i) {
-    inferredReturnTypes.push_back(makeRegister(Register(begin + i)));
-  }
+  for (RegisterTypeInterface reg : regs)
+    inferredReturnTypes.push_back(reg);
   return success();
 }
 

@@ -54,6 +54,29 @@ def GPRegTrait : NativeTypeTrait<"GPRegTrait"> {
     int64_t getSizeInBits() const {
       return static_cast<int64_t>(getRange().size()) * 32;
     }
+    RegisterProps getProps() const {
+      return RegisterProps::GeneralPurpose | RegisterProps::AllowsRanges;
+    }
+    RegisterTypeInterface makeRange(int16_t size, int16_t alignment,
+        llvm::function_ref<InFlightDiagnostic()> emitError) const {
+      assert(size > 1 && "makeRange requires size > 1");
+      RegisterRange range = getAsRange();
+      return get(getContext(), RegisterRange(range.begin(), size, alignment));
+    }
+    LogicalResult splitRange(
+        SmallVectorImpl<RegisterTypeInterface> &regs,
+        llvm::function_ref<InFlightDiagnostic()> emitError) const {
+      RegisterRange range = getAsRange();
+      if (range.size() <= 1) {
+        if (emitError)
+          emitError() << "cannot split a single register";
+        return failure();
+      }
+      for (int16_t i = 0; i < range.size(); ++i)
+        regs.push_back(cloneRegisterType(
+            RegisterRange(range.begin().getWithOffset(i), 1)));
+      return success();
+    }
 
     //===------------------------------------------------------------------===//
     // ResourceTypeInterface
@@ -124,6 +147,23 @@ def SpecialRegTrait : NativeTypeTrait<"SpecialRegTrait"> {
     }
     int64_t getSizeInBits() const {
       return kSizeInBits;
+    }
+    RegisterProps getProps() const {
+      return RegisterProps::None;
+    }
+    // Returns nullptr; callers must check the result.
+    RegisterTypeInterface makeRange(int16_t size, int16_t alignment,
+        llvm::function_ref<InFlightDiagnostic()> emitError) const {
+      if (emitError)
+        emitError() << "special registers cannot be made into ranges";
+      return nullptr;
+    }
+    LogicalResult splitRange(
+        SmallVectorImpl<RegisterTypeInterface> &regs,
+        llvm::function_ref<InFlightDiagnostic()> emitError) const {
+      if (emitError)
+        emitError() << "special registers cannot be split";
+      return failure();
     }
 
     //===------------------------------------------------------------------===//
