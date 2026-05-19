@@ -57,7 +57,8 @@ void AMDGCNDialect::initializeAttributes() {
 LogicalResult
 AddressSpaceAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                          AddressSpaceKind space, AccessKind kind) {
-  if (space != AddressSpaceKind::Local && space != AddressSpaceKind::Global) {
+  if (space != AddressSpaceKind::Local && space != AddressSpaceKind::Global &&
+      space != AddressSpaceKind::Buffer) {
     emitError() << "unsupported address space: "
                 << stringifyAddressSpaceKind(space);
     return failure();

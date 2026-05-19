@@ -71,6 +71,17 @@ struct PtrAddOpPattern : public OpCodeGenPattern<ptr::PtrAddOp> {
   matchAndRewrite(ptr::PtrAddOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override;
 };
+
+//===----------------------------------------------------------------------===//
+// MakeBufferRsrcOpPattern
+//===----------------------------------------------------------------------===//
+struct MakeBufferRsrcOpPattern
+    : public OpCodeGenPattern<amd_gpu::MakeBufferRsrcOp> {
+  using OpCodeGenPattern::OpCodeGenPattern;
+  LogicalResult
+  matchAndRewrite(amd_gpu::MakeBufferRsrcOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override;
+};
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -103,6 +114,15 @@ static bool isLocalMemory(ptr::PtrType ptrType) {
     return false;
   auto addrSpace = dyn_cast<AddressSpaceAttr>(memSpace);
   return addrSpace && addrSpace.getSpace() == AddressSpaceKind::Local;
+}
+
+/// Returns true if the ptr type has buffer address space.
+static bool isBufferMemory(ptr::PtrType ptrType) {
+  auto memSpace = ptrType.getMemorySpace();
+  if (!memSpace)
+    return false;
+  auto addrSpace = dyn_cast<AddressSpaceAttr>(memSpace);
+  return addrSpace && addrSpace.getSpace() == AddressSpaceKind::Buffer;
 }
 
 /// Create an i32 constant value.
@@ -198,6 +218,80 @@ static LogicalResult createGlobalStore(OpBuilder &rewriter, Location loc,
   }
 }
 
+/// Create a BUFFER_LOAD instruction for the given number of 32-bit words.
+/// `addr` is the 4-SGPR buffer descriptor. `voffset` is an optional VGPR byte
+/// offset (offen); when null the instruction uses no per-lane offset.
+static FailureOr<Value> createBufferLoad(OpBuilder &rewriter, Location loc,
+                                         Value dst, Value addr, Value voffset,
+                                         int64_t numWords) {
+  Value sOff = getI32Constant(rewriter, loc, 0);
+  Value cOff = getI32Constant(rewriter, loc, 0);
+  bool offen = voffset != nullptr;
+  switch (numWords) {
+  case 1:
+    return BufferLoadDword::create(rewriter, loc, dst, addr, voffset, sOff,
+                                   cOff, /*idxen=*/false, /*nt=*/false,
+                                   /*offen=*/offen, /*sc0=*/false,
+                                   /*sc1=*/false)
+        .getDestRes();
+  case 2:
+    return BufferLoadDwordx2::create(rewriter, loc, dst, addr, voffset, sOff,
+                                     cOff, /*idxen=*/false, /*nt=*/false,
+                                     /*offen=*/offen, /*sc0=*/false,
+                                     /*sc1=*/false)
+        .getDestRes();
+  case 3:
+    return BufferLoadDwordx3::create(rewriter, loc, dst, addr, voffset, sOff,
+                                     cOff, /*idxen=*/false, /*nt=*/false,
+                                     /*offen=*/offen, /*sc0=*/false,
+                                     /*sc1=*/false)
+        .getDestRes();
+  case 4:
+    return BufferLoadDwordx4::create(rewriter, loc, dst, addr, voffset, sOff,
+                                     cOff, /*idxen=*/false, /*nt=*/false,
+                                     /*offen=*/offen, /*sc0=*/false,
+                                     /*sc1=*/false)
+        .getDestRes();
+  default:
+    return failure();
+  }
+}
+
+/// Create a BUFFER_STORE instruction for the given number of 32-bit words.
+/// `addr` is the 4-SGPR buffer descriptor. `voffset` is an optional VGPR byte
+/// offset (offen); when null the instruction uses no per-lane offset.
+static LogicalResult createBufferStore(OpBuilder &rewriter, Location loc,
+                                       Value data, Value addr, Value voffset,
+                                       int64_t numWords) {
+  Value sOff = getI32Constant(rewriter, loc, 0);
+  Value cOff = getI32Constant(rewriter, loc, 0);
+  bool offen = voffset != nullptr;
+  switch (numWords) {
+  case 1:
+    BufferStoreDword::create(rewriter, loc, data, addr, voffset, sOff, cOff,
+                             /*idxen=*/false, /*nt=*/false, /*offen=*/offen,
+                             /*sc0=*/false, /*sc1=*/false);
+    return success();
+  case 2:
+    BufferStoreDwordx2::create(rewriter, loc, data, addr, voffset, sOff, cOff,
+                               /*idxen=*/false, /*nt=*/false, /*offen=*/offen,
+                               /*sc0=*/false, /*sc1=*/false);
+    return success();
+  case 3:
+    BufferStoreDwordx3::create(rewriter, loc, data, addr, voffset, sOff, cOff,
+                               /*idxen=*/false, /*nt=*/false, /*offen=*/offen,
+                               /*sc0=*/false, /*sc1=*/false);
+    return success();
+  case 4:
+    BufferStoreDwordx4::create(rewriter, loc, data, addr, voffset, sOff, cOff,
+                               /*idxen=*/false, /*nt=*/false, /*offen=*/offen,
+                               /*sc0=*/false, /*sc1=*/false);
+    return success();
+  default:
+    return failure();
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // PtrLoadOpPattern
 //===----------------------------------------------------------------------===//
@@ -211,6 +305,24 @@ PtrLoadOpPattern::matchAndRewrite(ptr::LoadOp op, OpAdaptor adaptor,
   Value dst = createAlloca(rewriter, loc, resultType);
   Value addr = adaptor.getPtr();
   auto ptrType = cast<ptr::PtrType>(op.getPtr().getType());
+
+  if (isBufferMemory(ptrType)) {
+    // For buffer pointers, look through amdgcn.ptr_add to recover the 4-SGPR
+    // descriptor and the VGPR byte offset (if any).
+    Value descriptor = addr;
+    Value voffset;
+    if (auto ptrAdd = addr.getDefiningOp<amdgcn::PtrAddOp>()) {
+      descriptor = ptrAdd.getPtr();
+      voffset = ptrAdd.getDynamicOffset();
+    }
+    FailureOr<Value> result =
+        createBufferLoad(rewriter, loc, dst, descriptor, voffset, numWords);
+    if (failed(result))
+      return rewriter.notifyMatchFailure(
+          op, "unsupported word count for buffer ptr.load");
+    rewriter.replaceOp(op, *result);
+    return success();
+  }
 
   FailureOr<Value> result =
       isLocalMemory(ptrType)
@@ -236,6 +348,24 @@ PtrStoreOpPattern::matchAndRewrite(ptr::StoreOp op, OpAdaptor adaptor,
   int64_t numWords = (converter.getTypeSize(op.getValue().getType()) + 3) / 4;
   Value addr = adaptor.getPtr();
   auto ptrType = cast<ptr::PtrType>(op.getPtr().getType());
+
+  if (isBufferMemory(ptrType)) {
+    // For buffer pointers, look through amdgcn.ptr_add to recover the 4-SGPR
+    // descriptor and the VGPR byte offset (if any).
+    Value descriptor = addr;
+    Value voffset;
+    if (auto ptrAdd = addr.getDefiningOp<amdgcn::PtrAddOp>()) {
+      descriptor = ptrAdd.getPtr();
+      voffset = ptrAdd.getDynamicOffset();
+    }
+    LogicalResult created =
+        createBufferStore(rewriter, loc, data, descriptor, voffset, numWords);
+    if (failed(created))
+      return rewriter.notifyMatchFailure(
+          op, "unsupported word count for buffer ptr.store");
+    rewriter.eraseOp(op);
+    return success();
+  }
 
   LogicalResult created =
       isLocalMemory(ptrType)
@@ -389,6 +519,30 @@ PtrAddOpPattern::matchAndRewrite(ptr::PtrAddOp op, OpAdaptor adaptor,
 }
 
 //===----------------------------------------------------------------------===//
+// MakeBufferRsrcOpPattern
+//===----------------------------------------------------------------------===//
+
+LogicalResult MakeBufferRsrcOpPattern::matchAndRewrite(
+    amd_gpu::MakeBufferRsrcOp op, OpAdaptor adaptor,
+    ConversionPatternRewriter &rewriter) const {
+  Value ptr = adaptor.getPtr();
+  Value numRecords = adaptor.getNumRecords();
+  // stride is I32 in amdgcn.make_buffer_rsrc, use the original unconverted
+  // value so the type is plain i32 rather than a register type.
+  Value stride = op.getStride();
+
+  // The result is a 4-SGPR buffer resource descriptor.
+  Type rsrcTy =
+      amdgcn::SGPRType::get(op.getContext(), RegisterRange(Register(), 4));
+  rewriter.replaceOpWithNewOp<amdgcn::MakeBufferRsrcOp>(
+      op, rsrcTy, ptr, numRecords, stride,
+      /*cache_swizzle=*/rewriter.getBoolAttr(false),
+      /*swizzle_enable=*/rewriter.getBoolAttr(false),
+      /*flags=*/op.getFlagsAttr());
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // API
 //===----------------------------------------------------------------------===//
 
@@ -414,13 +568,15 @@ void mlir::aster::amdgcn::populateCodeGenPatterns(CodeGenConverter &converter,
   target.addIllegalOp<amd_gpu::ThreadIdOp, amd_gpu::BlockIdOp,
                       amd_gpu::BlockDimOp, amd_gpu::GridDimOp,
                       aster_utils::AssumeRangeOp, aster_utils::AssumeUniformOp,
-                      lsir::FromRegOp, lsir::ToRegOp, lsir::RegConstraintOp,
-                      ptr::LoadOp, ptr::StoreOp, ptr::PtrAddOp>();
+                      amd_gpu::MakeBufferRsrcOp, lsir::FromRegOp, lsir::ToRegOp,
+                      lsir::RegConstraintOp, ptr::LoadOp, ptr::StoreOp,
+                      ptr::PtrAddOp>();
 
   // Add the patterns.
   patterns.add<IDDimOpPattern<amd_gpu::ThreadIdOp, amdgcn::ThreadIdOp>,
                IDDimOpPattern<amd_gpu::BlockIdOp, amdgcn::BlockIdOp>,
                IDDimOpPattern<amd_gpu::BlockDimOp, amdgcn::BlockDimOp>,
                IDDimOpPattern<amd_gpu::GridDimOp, amdgcn::GridDimOp>,
-               PtrLoadOpPattern, PtrStoreOpPattern, PtrAddOpPattern>(converter);
+               PtrLoadOpPattern, PtrStoreOpPattern, PtrAddOpPattern,
+               MakeBufferRsrcOpPattern>(converter);
 }

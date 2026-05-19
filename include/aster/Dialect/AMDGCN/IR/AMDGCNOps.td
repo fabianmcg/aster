@@ -784,7 +784,7 @@ def AMDGCN_PtrAddOp : AMDGCN_Op<"ptr_add", [
     ```
   }];
   let arguments = (ins
-    AnyRegOf<[SizedGPRRangeOf<SGPRType, [2]>, SizedGPRRangeOf<VGPRType, [1, 2]>]>:$ptr,
+    AnyRegOf<[SizedGPRRangeOf<SGPRType, [2, 4]>, SizedGPRRangeOf<VGPRType, [1, 2]>]>:$ptr,
     Optional<SizedGPRRangeOf<VGPRType, [1]>>:$dynamic_offset,
     Optional<SizedGPRRangeOf<SGPRType, [1]>>:$uniform_offset,
     DefaultValuedAttr<I64Attr, "0">:$const_offset,

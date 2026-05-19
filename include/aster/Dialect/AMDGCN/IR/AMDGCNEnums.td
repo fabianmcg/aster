@@ -74,6 +74,7 @@ def AddressSpaceKind : AutoI32EnumCases<"AddressSpaceKind",
     PrettyEnumCaseInfo<"local">,
     PrettyEnumCaseInfo<"generic">,
     PrettyEnumCaseInfo<"region">,
+    PrettyEnumCaseInfo<"buffer">,
   ]> {
   let cppNamespace = "::mlir::aster::amdgcn";
 }

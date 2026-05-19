@@ -69,6 +69,43 @@ def AMDGPU_GridDimOp : AMDGPU_Op<"grid_dim", [
 }
 
 //===----------------------------------------------------------------------===//
+// MakeBufferRsrcOp
+//===----------------------------------------------------------------------===//
+
+def AMDGPU_MakeBufferRsrcOp : AMDGPU_Op<"make_buffer_rsrc", [Pure]> {
+  let summary = "High-level buffer resource descriptor constructor";
+  let description = [{
+    Constructs a buffer resource descriptor from a flat pointer, a record
+    count, a stride, and packed flags. This is the high-level counterpart of
+    `amdgcn.make_buffer_rsrc` and is intended to be lowered to that op during
+    codegen.
+
+    The result is a `!ptr.ptr` with the AMDGCN buffer address space so that
+    subsequent `ptr.ptr_add` / `ptr.load` / `ptr.store` on it are lowered to
+    buffer (MUBUF) instructions.
+
+    Example:
+    ```mlir
+    %rsrc = amd_gpu.make_buffer_rsrc %ptr, %num_records, %stride,
+              flags = 131072
+            : (!ptr.ptr, i32, i32) -> !ptr.ptr<#amdgcn.addr_space<buffer, read_write>>
+    ```
+  }];
+  let arguments = (ins
+    AnyType:$ptr,
+    I32:$num_records,
+    I32:$stride,
+    I32Attr:$flags
+  );
+  let results = (outs AnyType:$result);
+  let assemblyFormat = [{
+    $ptr `,` $num_records `,` $stride `,`
+    `flags` `=` $flags
+    attr-dict `:` `(` type($ptr) `,` type($num_records) `,` type($stride) `)` `->` type($result)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // ThreadIdOp
 //===----------------------------------------------------------------------===//
 
