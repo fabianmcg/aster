@@ -2,7 +2,7 @@
 
 // CHECK-LABEL:   func.func @test_arith_opt(
 // CHECK-SAME:      %[[ARG0:.*]]: i32) -> i32
-// CHECK:           %[[THREAD_ID_0:.*]] = aster_utils.thread_id  x
+// CHECK:           %[[THREAD_ID_0:.*]] = amd_gpu.thread_id  x
 // CHECK:           %[[ASSUME_RANGE_0:.*]] = aster_utils.assume_range %[[ARG0]]
 // CHECK-SAME:        min 1
 // CHECK-SAME:        max 32 : i32
@@ -12,7 +12,7 @@
 func.func @test_arith_opt(%arg0: i32) -> i32 attributes {gpu.block_dims = array<i32: 64, 1, 1>, gpu.grid_dims = array<i32: 1024, 1, 1>, gpu.kernel} {
   %c0_i32 = arith.constant 0 : i32
   %c255_i32 = arith.constant 255 : i32
-  %0 = aster_utils.thread_id  x
+  %0 = amd_gpu.thread_id  x
   %1 = aster_utils.assume_range %arg0 min 1 max 32 : i32
   %2 = arith.addi %1, %0 : i32
   %3 = arith.remsi %2, %c255_i32 : i32
@@ -26,7 +26,7 @@ func.func @test_arith_opt(%arg0: i32) -> i32 attributes {gpu.block_dims = array<
 // converts dynamic bounds to static before int-range analysis kicks in.
 // CHECK-LABEL:   func.func @test_arith_opt_dynamic_bounds(
 // CHECK-SAME:      %[[ARG0:.*]]: i32) -> i32
-// CHECK:           %[[THREAD_ID_0:.*]] = aster_utils.thread_id  x
+// CHECK:           %[[THREAD_ID_0:.*]] = amd_gpu.thread_id  x
 // CHECK:           %[[ASSUME_RANGE_0:.*]] = aster_utils.assume_range %[[ARG0]]
 // CHECK-SAME:        min 1
 // CHECK-SAME:        max 32 : i32
@@ -38,7 +38,7 @@ func.func @test_arith_opt_dynamic_bounds(%arg0: i32) -> i32 attributes {gpu.bloc
   %c1_i32 = arith.constant 1 : i32
   %c32_i32 = arith.constant 32 : i32
   %c255_i32 = arith.constant 255 : i32
-  %0 = aster_utils.thread_id  x
+  %0 = amd_gpu.thread_id  x
   %1 = aster_utils.assume_range %arg0 min %c1_i32 max %c32_i32 : i32
   %2 = arith.addi %1, %0 : i32
   %3 = arith.remsi %2, %c255_i32 : i32
@@ -59,7 +59,7 @@ func.func @test_arith_opt_dynamic_bounds(%arg0: i32) -> i32 attributes {gpu.bloc
 func.func @test_arith_opt_truly_dynamic_bounds(%arg0: i32, %lo: i32, %hi: i32) -> i32 attributes {gpu.block_dims = array<i32: 64, 1, 1>, gpu.grid_dims = array<i32: 1024, 1, 1>, gpu.kernel} {
   %c0_i32 = arith.constant 0 : i32
   %c255_i32 = arith.constant 255 : i32
-  %0 = aster_utils.thread_id  x
+  %0 = amd_gpu.thread_id  x
   %1 = aster_utils.assume_range %arg0 min %lo max %hi : i32
   %2 = arith.addi %1, %0 : i32
   %3 = arith.remsi %2, %c255_i32 : i32
@@ -518,7 +518,7 @@ func.func @test_shift_combine_non_const(%arg0: i64, %arg1: i64) -> i64 {
 func.func @test_thread_id_y_range() -> i32 attributes {gpu.block_dims = array<i32: 64, 4, 1>, gpu.grid_dims = array<i32: 1, 1, 1>, gpu.kernel} {
   %c0 = arith.constant 0 : i32
   %c4 = arith.constant 4 : i32
-  %tid_y = aster_utils.thread_id y
+  %tid_y = amd_gpu.thread_id y
   %rem = arith.remsi %tid_y, %c4 : i32
   %neg = arith.cmpi slt, %rem, %c0 : i32
   %add = arith.addi %rem, %c4 : i32
@@ -533,7 +533,7 @@ func.func @test_thread_id_y_range() -> i32 attributes {gpu.block_dims = array<i3
 func.func @test_block_id_x_range() -> i32 attributes {gpu.block_dims = array<i32: 64, 1, 1>, gpu.grid_dims = array<i32: 8, 2, 1>, gpu.kernel} {
   %c0 = arith.constant 0 : i32
   %c8 = arith.constant 8 : i32
-  %bid_x = aster_utils.block_id x
+  %bid_x = amd_gpu.block_id x
   %rem = arith.remsi %bid_x, %c8 : i32
   %neg = arith.cmpi slt, %rem, %c0 : i32
   %add = arith.addi %rem, %c8 : i32
@@ -548,8 +548,8 @@ func.func @test_block_id_x_range() -> i32 attributes {gpu.block_dims = array<i32
 func.func @test_3d_dispatch_ranges() -> i32 attributes {gpu.block_dims = array<i32: 64, 2, 3>, gpu.grid_dims = array<i32: 4, 5, 1>, gpu.kernel} {
   %c0 = arith.constant 0 : i32
   %c6 = arith.constant 6 : i32
-  %tid_y = aster_utils.thread_id y
-  %bid_y = aster_utils.block_id y
+  %tid_y = amd_gpu.thread_id y
+  %bid_y = amd_gpu.block_id y
   %sum = arith.addi %tid_y, %bid_y : i32
   %rem = arith.remsi %sum, %c6 : i32
   %neg = arith.cmpi slt, %rem, %c0 : i32

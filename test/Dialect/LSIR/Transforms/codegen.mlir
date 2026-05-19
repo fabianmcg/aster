@@ -65,7 +65,7 @@ func.func private @test_add_constant(%arg0: i32) -> i32 attributes {abi = (!amdg
 // CHECK:           return %[[THREAD_ID_0]] : !amdgcn.vgpr
 // CHECK:         }
 func.func private @test_thread_id() -> i32 attributes {abi = () -> !amdgcn.vgpr} {
-  %0 = aster_utils.thread_id  x
+  %0 = amd_gpu.thread_id  x
   return {abi = () -> !amdgcn.vgpr} %0 : i32
 }
 
@@ -74,7 +74,7 @@ func.func private @test_thread_id() -> i32 attributes {abi = () -> !amdgcn.vgpr}
 // CHECK:           return %[[BLOCK_ID_0]] : !amdgcn.sgpr
 // CHECK:         }
 func.func private @test_block_id() -> i32 attributes {abi = () -> !amdgcn.sgpr} {
-  %0 = aster_utils.block_id  x
+  %0 = amd_gpu.block_id  x
   return {abi = () -> !amdgcn.sgpr} %0 : i32
 }
 

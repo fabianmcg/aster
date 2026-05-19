@@ -24,6 +24,7 @@ add_mlir_library(AsterTransforms
   LINK_LIBS PUBLIC
   ASTERAnalysis
   AMDGCNDialect
+  AMDGPUDialect
   AsterInterfaces
   AsterUtilsDialect
   LSIRDialect

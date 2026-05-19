@@ -10,6 +10,7 @@
 
 #include "aster/Analysis/ThreadUniformAnalysis.h"
 #include "aster/Dialect/AMDGCN/IR/AMDGCNTypes.h"
+#include "aster/Dialect/AMDGPU/IR/AMDGPUOps.h"
 #include "aster/Dialect/AsterUtils/IR/AsterUtilsOps.h"
 #include "aster/Dialect/LSIR/IR/LSIROps.h"
 #include "aster/Interfaces/GPUFuncInterface.h"
@@ -52,11 +53,10 @@ void ThreadUniform::print(llvm::raw_ostream &s) const {
 static bool isWorkgroupUniform(Operation *op) {
   if (op->hasTrait<OpTrait::ConstantLike>())
     return true;
-  if (isa<gpu::BlockDimOp, gpu::BlockIdOp, aster_utils::GridDimOp,
-          aster_utils::BlockIdOp, aster_utils::BlockDimOp,
-          lsir::AssumeNoaliasOp, aster_utils::AssumeRangeOp,
-          aster_utils::PassthroughOp, aster_utils::AssumeUniformOp,
-          ptr::PtrAddOp>(op))
+  if (isa<gpu::BlockDimOp, gpu::BlockIdOp, amd_gpu::GridDimOp,
+          amd_gpu::BlockIdOp, amd_gpu::BlockDimOp, lsir::AssumeNoaliasOp,
+          aster_utils::AssumeRangeOp, aster_utils::PassthroughOp,
+          aster_utils::AssumeUniformOp, ptr::PtrAddOp>(op))
     return true;
   if (isa<affine::AffineDialect>(op->getDialect()))
     return !isa<affine::AffineDmaStartOp, affine::AffineDmaWaitOp>(op);

@@ -5,7 +5,6 @@ add_mlir_dialect_library(AsterUtilsDialect
   IntRangeImpl.cpp
 
   DEPENDS
-  AsterUtilsEnumsIncGen
   AsterUtilsOpsIncGen
 
   LINK_LIBS PUBLIC

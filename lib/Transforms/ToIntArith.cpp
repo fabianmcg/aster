@@ -12,6 +12,7 @@
 
 #include "aster/Dialect/AMDGCN/IR/AMDGCNAttrs.h"
 #include "aster/Dialect/AMDGCN/IR/AMDGCNOps.h"
+#include "aster/Dialect/AMDGPU/IR/AMDGPUOps.h"
 #include "aster/Dialect/AsterUtils/IR/AsterUtilsDialect.h"
 #include "aster/Dialect/AsterUtils/IR/AsterUtilsOps.h"
 #include "aster/Interfaces/ModuleOpInterface.h"
@@ -117,7 +118,7 @@ LogicalResult IdDimOpConversion<Op, COp>::matchAndRewrite(
     ConversionPatternRewriter &rewriter) const {
   Value res = COp::create(
       rewriter, op.getLoc(),
-      static_cast<aster_utils::Dim>(static_cast<int>(op.getDimension())));
+      static_cast<amd_gpu::Dim>(static_cast<int>(op.getDimension())));
   res = arith::IndexCastOp::create(rewriter, op.getLoc(),
                                    rewriter.getIndexType(), res);
   rewriter.replaceOp(op, res);
@@ -232,8 +233,8 @@ void ToIntArith::runOnOperation() {
   ToIntConverter converter(&getContext(), bitwidth);
   ConversionTarget target(getContext());
   target.addLegalOp<UnrealizedConversionCastOp>();
-  target.addLegalDialect<arith::ArithDialect, aster_utils::AsterUtilsDialect,
-                         ptr::PtrDialect>();
+  target.addLegalDialect<amd_gpu::AMDGPUDialect, arith::ArithDialect,
+                         aster_utils::AsterUtilsDialect, ptr::PtrDialect>();
   target.addDynamicallyLegalOp<aster_utils::AssumeRangeOp,
                                aster_utils::AssumeUniformOp,
                                aster_utils::PassthroughOp>(
@@ -246,10 +247,10 @@ void ToIntArith::runOnOperation() {
   populateArithConversionPatterns(converter, target, conversionPatterns);
   populatePtrConversionPatterns(converter, target, conversionPatterns);
   conversionPatterns
-      .add<IdDimOpConversion<gpu::BlockIdOp, aster_utils::BlockIdOp>,
-           IdDimOpConversion<gpu::BlockDimOp, aster_utils::BlockDimOp>,
-           IdDimOpConversion<gpu::ThreadIdOp, aster_utils::ThreadIdOp>,
-           IdDimOpConversion<gpu::GridDimOp, aster_utils::GridDimOp>,
+      .add<IdDimOpConversion<gpu::BlockIdOp, amd_gpu::BlockIdOp>,
+           IdDimOpConversion<gpu::BlockDimOp, amd_gpu::BlockDimOp>,
+           IdDimOpConversion<gpu::ThreadIdOp, amd_gpu::ThreadIdOp>,
+           IdDimOpConversion<gpu::GridDimOp, amd_gpu::GridDimOp>,
            AssumeRangeOpConversion,
            GenericOpConversion<aster_utils::AssumeUniformOp>,
            GenericOpConversion<aster_utils::PassthroughOp>>(converter,

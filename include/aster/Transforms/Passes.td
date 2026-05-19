@@ -139,15 +139,13 @@ def ToIntArith
 
     Post-condition: #amdgcn.no_affine_ops (set on amdgcn.module)
   }];
-  let dependentDialects = [
-    "mlir::arith::ArithDialect",
-  ];
   let options = [
     Option<"bitwidth", "bitwidth", "unsigned", "32",
            "Index bitwidth to convert to">,
   ];
   let dependentDialects = [
     "mlir::arith::ArithDialect",
+    "mlir::aster::amd_gpu::AMDGPUDialect",
     "mlir::aster::aster_utils::AsterUtilsDialect",
   ];
 }

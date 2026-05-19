@@ -1,4 +1,5 @@
 add_subdirectory(AMDGCN)
+add_subdirectory(AMDGPU)
 add_subdirectory(AsterUtils)
 add_subdirectory(Layout)
 add_subdirectory(LSIR)

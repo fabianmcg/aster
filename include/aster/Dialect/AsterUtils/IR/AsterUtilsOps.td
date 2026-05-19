@@ -150,40 +150,6 @@ def AsterUtils_PassthroughOp : AsterUtils_Op<"passthrough", [
 }
 
 //===----------------------------------------------------------------------===//
-// BlockDimOp
-//===----------------------------------------------------------------------===//
-
-def AsterUtils_BlockDimOp : AsterUtils_Op<"block_dim", [
-    Pure,
-    DeclareOpInterfaceMethods<InferIntRangeInterface, ["inferResultRanges"]>
-  ]> {
-  let summary = "AsterUtils block dimension operation";
-  let description = [{
-    Returns the block (workgroup) ID in the specified dimension (x, y, or z).
-  }];
-  let arguments = (ins DimAttr:$dim);
-  let results = (outs I32:$result);
-  let assemblyFormat = "$dim attr-dict";
-}
-
-//===----------------------------------------------------------------------===//
-// BlockIdOp
-//===----------------------------------------------------------------------===//
-
-def AsterUtils_BlockIdOp : AsterUtils_Op<"block_id", [
-    Pure,
-    DeclareOpInterfaceMethods<InferIntRangeInterface, ["inferResultRanges"]>
-  ]> {
-  let summary = "AsterUtils block ID operation";
-  let description = [{
-    Returns the block (workgroup) ID in the specified dimension (x, y, or z).
-  }];
-  let arguments = (ins DimAttr:$dim);
-  let results = (outs I32:$result);
-  let assemblyFormat = "$dim attr-dict";
-}
-
-//===----------------------------------------------------------------------===//
 // FromAnyOp
 //===----------------------------------------------------------------------===//
 
@@ -205,40 +171,6 @@ def AsterUtils_FromAnyOp : AsterUtils_Op<"from_any", [Pure]> {
     $input attr-dict `:` type($result)
   }];
   let hasFolder = 1;
-}
-
-//===----------------------------------------------------------------------===//
-// GridDimOp
-//===----------------------------------------------------------------------===//
-
-def AsterUtils_GridDimOp : AsterUtils_Op<"grid_dim", [
-    Pure,
-    DeclareOpInterfaceMethods<InferIntRangeInterface, ["inferResultRanges"]>
-  ]> {
-  let summary = "AsterUtils grid dimension operation";
-  let description = [{
-    Returns the grid dimension in the specified dimension (x, y, or z).
-  }];
-  let arguments = (ins DimAttr:$dim);
-  let results = (outs I32:$result);
-  let assemblyFormat = "$dim attr-dict";
-}
-
-//===----------------------------------------------------------------------===//
-// ThreadIdOp
-//===----------------------------------------------------------------------===//
-
-def AsterUtils_ThreadIdOp : AsterUtils_Op<"thread_id", [
-    Pure,
-    DeclareOpInterfaceMethods<InferIntRangeInterface, ["inferResultRanges"]>
-  ]> {
-  let summary = "AsterUtils thread ID operation";
-  let description = [{
-    Returns the thread ID in the specified dimension (x, y, or z).
-  }];
-  let arguments = (ins DimAttr:$dim);
-  let results = (outs I32:$result);
-  let assemblyFormat = "$dim attr-dict";
 }
 
 //===----------------------------------------------------------------------===//

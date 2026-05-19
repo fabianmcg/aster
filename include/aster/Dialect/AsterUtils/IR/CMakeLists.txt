@@ -8,8 +8,3 @@ mlir_tablegen(AsterUtilsAttrs.cpp.inc -gen-attrdef-defs -dialect=aster_utils -at
 mlir_tablegen(AsterUtilsOps.h.inc -gen-op-decls)
 mlir_tablegen(AsterUtilsOps.cpp.inc -gen-op-defs)
 add_public_tablegen_target(AsterUtilsOpsIncGen)
-
-set(LLVM_TARGET_DEFINITIONS AsterUtilsEnums.td)
-mlir_tablegen(AsterUtilsEnums.h.inc -gen-enum-decls)
-mlir_tablegen(AsterUtilsEnums.cpp.inc -gen-enum-defs)
-add_public_tablegen_target(AsterUtilsEnumsIncGen)

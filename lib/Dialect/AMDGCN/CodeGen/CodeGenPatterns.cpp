@@ -16,6 +16,7 @@
 #include "aster/Dialect/AMDGCN/CodeGen/CodeGen.h"
 #include "aster/Dialect/AMDGCN/IR/AMDGCNOps.h"
 #include "aster/Dialect/AMDGCN/IR/Utils.h"
+#include "aster/Dialect/AMDGPU/IR/AMDGPUOps.h"
 #include "aster/Dialect/AsterUtils/IR/AsterUtilsOps.h"
 #include "aster/Dialect/LSIR/IR/LSIRDialect.h"
 #include "aster/Dialect/LSIR/IR/LSIROps.h"
@@ -81,7 +82,7 @@ LogicalResult IDDimOpPattern<OpTy, NewOpTy>::matchAndRewrite(
     OpTy op, typename OpTy::Adaptor adaptor,
     ConversionPatternRewriter &rewriter) const {
   Type type = this->converter.convertType(op);
-  Type regTy = std::is_same_v<OpTy, aster_utils::ThreadIdOp>
+  Type regTy = std::is_same_v<OpTy, amd_gpu::ThreadIdOp>
                    ? Type(amdgcn::VGPRType::get(op.getContext(), Register()))
                    : Type(amdgcn::SGPRType::get(op.getContext(), Register()));
   auto nOp = NewOpTy::create(
@@ -410,16 +411,16 @@ void mlir::aster::amdgcn::populateCodeGenPatterns(CodeGenConverter &converter,
   // Configure the conversion target.
   target.addLegalDialect<amdgcn::AMDGCNDialect>();
 
-  target.addIllegalOp<aster_utils::ThreadIdOp, aster_utils::BlockIdOp,
-                      aster_utils::BlockDimOp, aster_utils::GridDimOp,
+  target.addIllegalOp<amd_gpu::ThreadIdOp, amd_gpu::BlockIdOp,
+                      amd_gpu::BlockDimOp, amd_gpu::GridDimOp,
                       aster_utils::AssumeRangeOp, aster_utils::AssumeUniformOp,
                       lsir::FromRegOp, lsir::ToRegOp, lsir::RegConstraintOp,
                       ptr::LoadOp, ptr::StoreOp, ptr::PtrAddOp>();
 
   // Add the patterns.
-  patterns.add<IDDimOpPattern<aster_utils::ThreadIdOp, amdgcn::ThreadIdOp>,
-               IDDimOpPattern<aster_utils::BlockIdOp, amdgcn::BlockIdOp>,
-               IDDimOpPattern<aster_utils::BlockDimOp, amdgcn::BlockDimOp>,
-               IDDimOpPattern<aster_utils::GridDimOp, amdgcn::GridDimOp>,
+  patterns.add<IDDimOpPattern<amd_gpu::ThreadIdOp, amdgcn::ThreadIdOp>,
+               IDDimOpPattern<amd_gpu::BlockIdOp, amdgcn::BlockIdOp>,
+               IDDimOpPattern<amd_gpu::BlockDimOp, amdgcn::BlockDimOp>,
+               IDDimOpPattern<amd_gpu::GridDimOp, amdgcn::GridDimOp>,
                PtrLoadOpPattern, PtrStoreOpPattern, PtrAddOpPattern>(converter);
 }

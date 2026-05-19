@@ -14,6 +14,7 @@ add_mlir_library(ASTERInit
   LINK_LIBS PUBLIC
   AMDGCNDialect
   AMDGCNTransforms
+  AMDGPUDialect
   AsterCodeGenTransforms
   AsterInterfaces
   AsterUpstreamModelsImpl

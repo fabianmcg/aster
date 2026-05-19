@@ -12,18 +12,7 @@
 #define ASTER_DIALECT_ASTERUTILS_IR_ASTERUTILSATTRS_TD
 
 include "aster/Dialect/AsterUtils/IR/AsterUtilsDialect.td"
-include "aster/Dialect/AsterUtils/IR/AsterUtilsEnums.td"
 include "aster/Interfaces/SchedInterfaces.td"
-
-//===----------------------------------------------------------------------===//
-// GPU dimension identifier.
-//===----------------------------------------------------------------------===//
-
-def DimAttr : AsterUtils_EnumAttr<"dim", DimEnum, []> {
-  let description = [{
-    AsterUtils gpu dimension identifier attribute.
-  }];
-}
 
 //===----------------------------------------------------------------------===//
 // Scheduling attributes

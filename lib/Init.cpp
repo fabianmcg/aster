@@ -12,6 +12,7 @@
 #include "aster/CodeGen/Passes.h"
 #include "aster/Dialect/AMDGCN/IR/AMDGCNDialect.h"
 #include "aster/Dialect/AMDGCN/Transforms/Passes.h"
+#include "aster/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "aster/Dialect/AsterUtils/IR/AsterUtilsDialect.h"
 #include "aster/Dialect/AsterUtils/Transforms/Passes.h"
 #include "aster/Dialect/LSIR/IR/LSIRDialect.h"
@@ -406,6 +407,7 @@ void mlir::aster::asterRegisterUpstreamMLIRExternalModels(
 ///
 void mlir::aster::initDialects(DialectRegistry &registry) {
   registry.insert<amdgcn::AMDGCNDialect>();
+  registry.insert<amd_gpu::AMDGPUDialect>();
   registry.insert<layout::LayoutDialect>();
   registry.insert<lsir::LSIRDialect>();
   registry.insert<aster_utils::AsterUtilsDialect>();

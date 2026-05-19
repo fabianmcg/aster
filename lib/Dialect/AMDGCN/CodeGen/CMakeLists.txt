@@ -4,6 +4,7 @@ add_mlir_library(AsterAMDGCNCodeGen
 
   LINK_LIBS PUBLIC
   AMDGCNDialect
+  AMDGPUDialect
   AsterCodeGen
   AsterLegalizer
   AsterUtilsDialect

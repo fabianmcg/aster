@@ -1,6 +1,6 @@
-//===-- AsterUtilsEnums.td - AsterUtils enumerations -------*- tablegen -*-===//
+//===-- AMDGPUEnums.td - AMDGPU enumerations ---------------*- tablegen -*-===//
 //
-// Copyright 2025 The ASTER Authors
+// Copyright 2026 The ASTER Authors
 //
 // Licensed under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -8,8 +8,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef ASTERUTILS_ENUMS
-#define ASTERUTILS_ENUMS
+#ifndef ASTER_DIALECT_AMDGPU_IR_AMDGPUENUMS_TD
+#define ASTER_DIALECT_AMDGPU_IR_AMDGPUENUMS_TD
 
 include "mlir/IR/Utils.td"
 include "aster/Support/EnumBase.td"
@@ -24,7 +24,7 @@ def DimEnum : AutoI32EnumCases<"Dim",
     PrettyEnumCaseInfo<"y">,
     PrettyEnumCaseInfo<"z">,
   ]> {
-  let cppNamespace = "::mlir::aster::aster_utils";
+  let cppNamespace = "::mlir::aster::amd_gpu";
 }
 
-#endif // ASTERUTILS_ENUMS
+#endif // ASTER_DIALECT_AMDGPU_IR_AMDGPUENUMS_TD

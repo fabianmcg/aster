@@ -6,6 +6,7 @@ add_mlir_library(ASTERAnalysis
 
   LINK_LIBS PUBLIC
   AMDGCNDialect
+  AMDGPUDialect
   ASTERIR
   ASTERSupport
   AsterInterfaces

@@ -1,0 +1,13 @@
+set(LLVM_TARGET_DEFINITIONS AMDGPUOps.td)
+mlir_tablegen(AMDGPUDialect.h.inc -gen-dialect-decls -dialect=amd_gpu)
+mlir_tablegen(AMDGPUDialect.cpp.inc -gen-dialect-defs -dialect=amd_gpu)
+mlir_tablegen(AMDGPUAttrs.h.inc -gen-attrdef-decls -dialect=amd_gpu -attrdefs-dialect=amd_gpu)
+mlir_tablegen(AMDGPUAttrs.cpp.inc -gen-attrdef-defs -dialect=amd_gpu -attrdefs-dialect=amd_gpu)
+mlir_tablegen(AMDGPUOps.h.inc -gen-op-decls)
+mlir_tablegen(AMDGPUOps.cpp.inc -gen-op-defs)
+add_public_tablegen_target(AMDGPUOpsIncGen)
+
+set(LLVM_TARGET_DEFINITIONS AMDGPUEnums.td)
+mlir_tablegen(AMDGPUEnums.h.inc -gen-enum-decls)
+mlir_tablegen(AMDGPUEnums.cpp.inc -gen-enum-defs)
+add_public_tablegen_target(AMDGPUEnumsIncGen)
