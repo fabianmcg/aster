@@ -39,6 +39,11 @@ func.func @test_vop1_cvt_i32_f32(%src0: !amdgcn.vgpr, %dst: !amdgcn.vgpr) -> !am
   return %result : !amdgcn.vgpr
 }
 
+func.func @test_vop1_rcp_iflag_f32(%src0: !amdgcn.vgpr, %dst: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %result = amdgcn.v_rcp_iflag_f32 outs(%dst) ins(%src0) : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr)
+  return %result : !amdgcn.vgpr
+}
+
 // Test with immediate source
 func.func @test_vop1_cvt_f32_u32_imm(%dst: !amdgcn.vgpr) -> !amdgcn.vgpr {
   %c42 = arith.constant 42 : i32
