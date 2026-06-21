@@ -224,6 +224,7 @@ _VOP_NEW_OPS_CVT = {
     "v_cvt_f32_i32": VCvtF32I32,
     "v_cvt_u32_f32": VCvtU32F32,
     "v_cvt_i32_f32": VCvtI32F32,
+    "v_rcp_iflag_f32": VRcpIflagF32,
 }
 
 _VOP_NEW_OPS_CVT_PK = {

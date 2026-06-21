@@ -1412,3 +1412,160 @@ func.func @test_mul_hi_s_sgpr(%dst: !amdgcn.sgpr, %lhs: !amdgcn.sgpr, %rhs: !amd
   %res = lsir.mul_hi_s i32 %dst, %lhs, %rhs : !amdgcn.sgpr, !amdgcn.sgpr, !amdgcn.sgpr
   return %res : !amdgcn.sgpr
 }
+
+// -----
+
+// CHECK-LABEL: func.func @test_divui_i32
+// CHECK-SAME: (%[[DST:.*]]: !amdgcn.vgpr, %[[A:.*]]: !amdgcn.vgpr, %[[B:.*]]: !amdgcn.vgpr)
+// Reciprocal estimate: cvt -> rcp -> scale mul -> cvt-to-int.
+// CHECK: amdgcn.v_cvt_f32_u32
+// CHECK: amdgcn.v_rcp_iflag_f32
+// CHECK: amdgcn.v_mul_f32
+// CHECK: amdgcn.v_cvt_u32_f32
+// UNR step: NegY*Z then Z += mulhi(Z, NegYZ).
+// CHECK: amdgcn.v_sub_u32
+// CHECK: amdgcn.v_mul_lo_u32
+// CHECK: amdgcn.v_mul_hi_u32
+// CHECK: amdgcn.v_add_u32
+// Quotient/remainder estimate.
+// CHECK: amdgcn.v_mul_hi_u32
+// CHECK: amdgcn.v_mul_lo_u32
+// CHECK: amdgcn.v_sub_u32
+// First refinement round: cmp_ge, Q+1 cndmask, R-Y cndmask.
+// CHECK: amdgcn.v_cmp_ge_u32
+// CHECK: amdgcn.v_add_u32
+// CHECK: amdgcn.v_cndmask_b32
+// CHECK: amdgcn.v_sub_u32
+// CHECK: amdgcn.v_cndmask_b32
+// Second refinement round: cmp_ge, Q+1 cndmask only (rem not used for div).
+// CHECK: amdgcn.v_cmp_ge_u32
+// CHECK: amdgcn.v_add_u32
+// CHECK: amdgcn.v_cndmask_b32
+// CHECK-NOT: amdgcn.v_cmp_le_u32
+// CHECK-NOT: amdgcn.s_and_b64
+// CHECK-NOT: amdgcn.v_cmp_ne_i32
+// CHECK: lsir.copy
+func.func @test_divui_i32(%dst: !amdgcn.vgpr, %a: !amdgcn.vgpr, %b: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %r = lsir.divui i32 %dst, %a, %b : !amdgcn.vgpr, !amdgcn.vgpr, !amdgcn.vgpr
+  return %r : !amdgcn.vgpr
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_remui_i32
+// CHECK-SAME: (%[[DST:.*]]: !amdgcn.vgpr, %[[A:.*]]: !amdgcn.vgpr, %[[B:.*]]: !amdgcn.vgpr)
+// Reciprocal estimate and UNR step.
+// CHECK: amdgcn.v_cvt_f32_u32
+// CHECK: amdgcn.v_rcp_iflag_f32
+// CHECK: amdgcn.v_mul_f32
+// CHECK: amdgcn.v_cvt_u32_f32
+// CHECK: amdgcn.v_sub_u32
+// CHECK: amdgcn.v_mul_lo_u32
+// CHECK: amdgcn.v_mul_hi_u32
+// CHECK: amdgcn.v_add_u32
+// Quotient/remainder estimate.
+// CHECK: amdgcn.v_mul_hi_u32
+// CHECK: amdgcn.v_mul_lo_u32
+// CHECK: amdgcn.v_sub_u32
+// Two refinement rounds; Q updates are DCE'd since only remainder is returned.
+// CHECK: amdgcn.v_cmp_ge_u32
+// CHECK: amdgcn.v_sub_u32
+// CHECK: amdgcn.v_cndmask_b32
+// CHECK: amdgcn.v_cmp_ge_u32
+// CHECK: amdgcn.v_sub_u32
+// CHECK: amdgcn.v_cndmask_b32
+// CHECK-NOT: amdgcn.v_cmp_le_u32
+// CHECK-NOT: amdgcn.s_and_b64
+// CHECK-NOT: amdgcn.v_cmp_ne_i32
+// CHECK: lsir.copy
+func.func @test_remui_i32(%dst: !amdgcn.vgpr, %a: !amdgcn.vgpr, %b: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %r = lsir.remui i32 %dst, %a, %b : !amdgcn.vgpr, !amdgcn.vgpr, !amdgcn.vgpr
+  return %r : !amdgcn.vgpr
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_divsi_i32
+// CHECK-SAME: (%[[DST:.*]]: !amdgcn.vgpr, %[[A:.*]]: !amdgcn.vgpr, %[[B:.*]]: !amdgcn.vgpr)
+// Sign extraction via arithmetic right-shift by 31.
+// CHECK: amdgcn.v_ashrrev_i32
+// CHECK: amdgcn.v_ashrrev_i32
+// Absolute value via (x ^ sign) - sign.
+// CHECK: amdgcn.v_xor_b32
+// CHECK: amdgcn.v_sub_u32
+// CHECK: amdgcn.v_xor_b32
+// CHECK: amdgcn.v_sub_u32
+// Unsigned core: reciprocal estimate.
+// CHECK: amdgcn.v_cvt_f32_u32
+// CHECK: amdgcn.v_rcp_iflag_f32
+// CHECK: amdgcn.v_mul_f32
+// CHECK: amdgcn.v_cvt_u32_f32
+// UNR + quotient estimate + two refinement rounds.
+// CHECK: amdgcn.v_sub_u32
+// CHECK: amdgcn.v_mul_lo_u32
+// CHECK: amdgcn.v_mul_hi_u32
+// CHECK: amdgcn.v_add_u32
+// CHECK: amdgcn.v_mul_hi_u32
+// CHECK: amdgcn.v_mul_lo_u32
+// CHECK: amdgcn.v_sub_u32
+// First refinement (Q+1 cndmask, R-Y cndmask both computed as R feeds round 2).
+// CHECK: amdgcn.v_cmp_ge_u32
+// CHECK: amdgcn.v_add_u32
+// CHECK: amdgcn.v_cndmask_b32
+// CHECK: amdgcn.v_cmp_ge_u32
+// Second refinement (only Q cndmask; R update is DCE'd as only Q is returned).
+// CHECK: amdgcn.v_add_u32
+// CHECK: amdgcn.v_cndmask_b32
+// Sign fixup for quotient: (uq ^ qsign) - qsign.
+// CHECK: amdgcn.v_xor_b32
+// CHECK: amdgcn.v_xor_b32
+// CHECK: amdgcn.v_sub_u32
+// CHECK-NOT: amdgcn.v_cmp_le_u32
+// CHECK-NOT: amdgcn.s_and_b64
+// CHECK: lsir.copy
+func.func @test_divsi_i32(%dst: !amdgcn.vgpr, %a: !amdgcn.vgpr, %b: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %r = lsir.divsi i32 %dst, %a, %b : !amdgcn.vgpr, !amdgcn.vgpr, !amdgcn.vgpr
+  return %r : !amdgcn.vgpr
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_remsi_i32
+// CHECK-SAME: (%[[DST:.*]]: !amdgcn.vgpr, %[[A:.*]]: !amdgcn.vgpr, %[[B:.*]]: !amdgcn.vgpr)
+// Sign extraction.
+// CHECK: amdgcn.v_ashrrev_i32
+// CHECK: amdgcn.v_ashrrev_i32
+// Absolute value.
+// CHECK: amdgcn.v_xor_b32
+// CHECK: amdgcn.v_sub_u32
+// CHECK: amdgcn.v_xor_b32
+// CHECK: amdgcn.v_sub_u32
+// Unsigned core UNR step and quotient estimate.
+// CHECK: amdgcn.v_cvt_f32_u32
+// CHECK: amdgcn.v_rcp_iflag_f32
+// CHECK: amdgcn.v_mul_f32
+// CHECK: amdgcn.v_cvt_u32_f32
+// CHECK: amdgcn.v_sub_u32
+// CHECK: amdgcn.v_mul_lo_u32
+// CHECK: amdgcn.v_mul_hi_u32
+// CHECK: amdgcn.v_add_u32
+// CHECK: amdgcn.v_mul_hi_u32
+// CHECK: amdgcn.v_mul_lo_u32
+// CHECK: amdgcn.v_sub_u32
+// Two refinement rounds; Q updates are DCE'd since only remainder is returned.
+// CHECK: amdgcn.v_cmp_ge_u32
+// CHECK: amdgcn.v_sub_u32
+// CHECK: amdgcn.v_cndmask_b32
+// CHECK: amdgcn.v_cmp_ge_u32
+// CHECK: amdgcn.v_sub_u32
+// CHECK: amdgcn.v_cndmask_b32
+// Sign fixup for remainder: (ur ^ sa) - sa.
+// CHECK: amdgcn.v_xor_b32
+// CHECK: amdgcn.v_sub_u32
+// CHECK-NOT: amdgcn.v_cmp_le_u32
+// CHECK-NOT: amdgcn.s_and_b64
+// CHECK: lsir.copy
+func.func @test_remsi_i32(%dst: !amdgcn.vgpr, %a: !amdgcn.vgpr, %b: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %r = lsir.remsi i32 %dst, %a, %b : !amdgcn.vgpr, !amdgcn.vgpr, !amdgcn.vgpr
+  return %r : !amdgcn.vgpr
+}

@@ -1655,6 +1655,29 @@ def VCvtU32F32 : VOP1Out1In1Inst<"v_cvt_u32_f32",
 }
 #endif // VCVTU32F32_DEF
 
+#ifndef VRCPIFLAGF32_DEF
+#define VRCPIFLAGF32_DEF
+def VRcpIflagF32 : VOP1Out1In1Inst<"v_rcp_iflag_f32",
+    /*dst0=*/[VGPROf<1>],
+    /*src0=*/[OneGPROrSRegOrConstOf<InlineLitFP<[F32]>, F32>,
+             OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>]
+  > {
+  let archs = [CDNA3Isa, CDNA4Isa];
+  let description = [{
+    Calculate the reciprocal of the float input in a manner suitable for
+    integer division. Intended for use in an integer division macro.
+  }];
+  let encodings = [
+    InstEnc<[ENC_VOP1_CDNA3, ENC_VOP1_CDNA4], 0b00100011, (pred
+      OneGPROrSRegOrConstOf<InlineLitFP<[F32]>, F32>:$src0
+    )>,
+    InstEnc<[ENC_VOP3_CDNA3, ENC_VOP3_CDNA4], 0b0110100011, (pred
+      OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>:$src0
+    )>
+  ];
+}
+#endif // VRCPIFLAGF32_DEF
+
 #ifndef VMOVB32_DEF
 #define VMOVB32_DEF
 def VMovB32 : VOP1Out1In1Inst<"v_mov_b32",

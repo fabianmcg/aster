@@ -32,6 +32,8 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Casting.h"
 
+#include "llvm/ADT/bit.h"
+
 #include <cstdint>
 #include <utility>
 
@@ -352,6 +354,31 @@ struct SelectOpPattern : public OpRewritePattern<lsir::SelectOp> {
 struct PtrAddOpPattern : public OpRewritePattern<PtrAddOp> {
   using Base::Base;
   LogicalResult matchAndRewrite(PtrAddOp op,
+                                PatternRewriter &rewriter) const override;
+};
+
+//===----------------------------------------------------------------------===//
+// DivUI/RemUI/DivSI/RemSI OpPatterns
+//===----------------------------------------------------------------------===//
+
+struct DivUIOpPattern : public OpRewritePattern<lsir::DivUIOp> {
+  using Base::Base;
+  LogicalResult matchAndRewrite(lsir::DivUIOp op,
+                                PatternRewriter &rewriter) const override;
+};
+struct RemUIOpPattern : public OpRewritePattern<lsir::RemUIOp> {
+  using Base::Base;
+  LogicalResult matchAndRewrite(lsir::RemUIOp op,
+                                PatternRewriter &rewriter) const override;
+};
+struct DivSIOpPattern : public OpRewritePattern<lsir::DivSIOp> {
+  using Base::Base;
+  LogicalResult matchAndRewrite(lsir::DivSIOp op,
+                                PatternRewriter &rewriter) const override;
+};
+struct RemSIOpPattern : public OpRewritePattern<lsir::RemSIOp> {
+  using Base::Base;
+  LogicalResult matchAndRewrite(lsir::RemSIOp op,
                                 PatternRewriter &rewriter) const override;
 };
 } // namespace
@@ -2184,6 +2211,245 @@ LogicalResult CmpIOpPattern::matchAndRewrite(lsir::CmpIOp op,
 }
 
 //===----------------------------------------------------------------------===//
+// DivUI/RemUI/DivSI/RemSI helpers
+//===----------------------------------------------------------------------===//
+
+/// Allocate a lane-mask (VCC or VCC_LO) depending on wave width.
+static Value allocLaneMask(PatternRewriter &rewriter, Location loc,
+                           Operation *op) {
+  Type lmt = getLaneMaskType(op);
+  return createAllocation(rewriter, loc, cast<RegisterTypeInterface>(lmt));
+}
+
+/// Ensure a Value is in a VGPR; materialise via v_mov_b32 if needed.
+static Value toVGPR(PatternRewriter &rewriter, Location loc, Value v) {
+  if (isa<VGPRType>(v.getType()))
+    return v;
+  Value dst = createAllocation(rewriter, loc, getVGPR(rewriter.getContext()));
+  return VMovB32::create(rewriter, loc, dst, v).getDst0Res();
+}
+
+/// Emit v_cndmask_b32: result = mask ? trueVal : falseVal.
+/// VOP2 requires src1 (trueVal) to be a VGPR; promotes via toVGPR if needed.
+static Value emitCndmask(PatternRewriter &rewriter, Location loc, Value dst,
+                         Value falseVal, Value trueVal, Value mask) {
+  trueVal = toVGPR(rewriter, loc, trueVal);
+  return VCndmaskB32::create(rewriter, loc, dst, falseVal, trueVal, mask)
+      .getDst0Res();
+}
+
+/// Compute the integer reciprocal estimate Z ≈ 2^32/Y using one UNR step.
+/// Matches the LLVM AMDGPULegalizerInfo::legalizeUnsignedDIV_REM32Impl logic.
+static Value emitReciprocalEstimate(PatternRewriter &rewriter, Location loc,
+                                    Value divisor) {
+  MLIRContext *ctx = rewriter.getContext();
+  std::function<Value()> vgpr = [&]() {
+    return createAllocation(rewriter, loc, getVGPR(ctx));
+  };
+
+  // FloatY = v_cvt_f32_u32(Y).
+  Value floatY =
+      VCvtF32U32::create(rewriter, loc, vgpr(), divisor).getDst0Res();
+  // Rcp = v_rcp_iflag_f32(FloatY).
+  Value rcp = VRcpIflagF32::create(rewriter, loc, vgpr(), floatY).getDst0Res();
+  // ScaledY = v_mul_f32(Scale, Rcp) where Scale = 0x4f7ffffe as f32.
+  // Materialize the bit-pattern as an i32 literal via v_mov_b32 so no f32
+  // arith.constant remains in the AMDGCN kernel (the translator only handles
+  // integer constants, not float ones).
+  Value scaleInt =
+      getI32Constant(rewriter, loc, static_cast<int32_t>(0x4f7ffffe));
+  Value scaleVgpr = VMovB32::create(rewriter, loc, vgpr(), scaleInt).getDst0Res();
+  Value scaledY =
+      VMulF32::create(rewriter, loc, vgpr(), scaleVgpr, rcp).getDst0Res();
+  // Z = v_cvt_u32_f32(ScaledY).
+  Value z = VCvtU32F32::create(rewriter, loc, vgpr(), scaledY).getDst0Res();
+
+  // One UNR step: NegY = 0 - Y; NegYZ = NegY * Z; Z = Z + mulhi(Z, NegYZ).
+  Value negY =
+      VSubU32::create(rewriter, loc, vgpr(), getI32Constant(rewriter, loc, 0),
+                      divisor)
+          .getDst0Res();
+  Value negYZ = VMulLoU32::create(rewriter, loc, vgpr(), negY, z).getDst0Res();
+  Value mulHiZNegYZ =
+      VMulHiU32::create(rewriter, loc, vgpr(), z, negYZ).getDst0Res();
+  z = VAddU32::create(rewriter, loc, vgpr(), z, mulHiZNegYZ).getDst0Res();
+  return z;
+}
+
+/// One refinement round: if R >= Y then Q += 1, R -= Y.
+/// Returns the updated {Q, R}.
+static std::pair<Value, Value>
+emitRefinementStep(PatternRewriter &rewriter, Location loc, Operation *op,
+                   Value q, Value r, Value divisor) {
+  MLIRContext *ctx = rewriter.getContext();
+  std::function<Value()> vgpr = [&]() {
+    return createAllocation(rewriter, loc, getVGPR(ctx));
+  };
+
+  // Cond = R >= Y (unsigned).
+  Value cond =
+      VCmpGeU32::create(rewriter, loc, allocLaneMask(rewriter, loc, op), r,
+                        divisor)
+          .getDst0Res();
+  // Q = Cond ? Q + 1 : Q.
+  Value qP1 =
+      VAddU32::create(rewriter, loc, vgpr(), getI32Constant(rewriter, loc, 1),
+                      q)
+          .getDst0Res();
+  q = emitCndmask(rewriter, loc, vgpr(), q, qP1, cond);
+  // R = Cond ? R - Y : R.
+  Value rMinusY = VSubU32::create(rewriter, loc, vgpr(), r, divisor).getDst0Res();
+  r = emitCndmask(rewriter, loc, vgpr(), r, rMinusY, cond);
+  return {q, r};
+}
+
+/// Full unsigned 32-bit divide/remainder matching LLVM's reference algorithm.
+/// Returns {quotient, remainder}; dividend and divisor must be VGPR i32 values.
+static std::pair<Value, Value>
+emitUnsignedDivRem(PatternRewriter &rewriter, Location loc, Operation *op,
+                   Value dividend, Value divisor) {
+  MLIRContext *ctx = rewriter.getContext();
+  std::function<Value()> vgpr = [&]() {
+    return createAllocation(rewriter, loc, getVGPR(ctx));
+  };
+
+  // Z ≈ 2^32 / divisor via reciprocal estimate and one UNR step.
+  Value z = emitReciprocalEstimate(rewriter, loc, divisor);
+  // Q = mulhi(X, Z) — initial quotient estimate.
+  Value q = VMulHiU32::create(rewriter, loc, vgpr(), dividend, z).getDst0Res();
+  // R = X - Q * Y — initial remainder estimate.
+  Value qy = VMulLoU32::create(rewriter, loc, vgpr(), q, divisor).getDst0Res();
+  Value r = VSubU32::create(rewriter, loc, vgpr(), dividend, qy).getDst0Res();
+  // Two refinement rounds to correct off-by-one errors.
+  std::tie(q, r) = emitRefinementStep(rewriter, loc, op, q, r, divisor);
+  std::tie(q, r) = emitRefinementStep(rewriter, loc, op, q, r, divisor);
+  return {q, r};
+}
+
+/// Signed 32-bit divide/remainder via sign-correction around the unsigned core.
+static std::pair<Value, Value>
+emitSignedDivRem(PatternRewriter &rewriter, Location loc, Operation *op,
+                 Value dividend, Value divisor) {
+  MLIRContext *ctx = rewriter.getContext();
+  std::function<Value()> vgpr = [&]() {
+    return createAllocation(rewriter, loc, getVGPR(ctx));
+  };
+
+  Value c31 = getI32Constant(rewriter, loc, 31);
+  // sa = arithmetic right-shift of dividend by 31: all-ones if negative.
+  // VAshrrevI32 operands are reversed: src0=shift-amount, src1=value.
+  Value sa = VAshrrevI32::create(rewriter, loc, vgpr(), c31, dividend)
+                 .getDst0Res();
+  // sb = arithmetic right-shift of divisor by 31.
+  Value sb = VAshrrevI32::create(rewriter, loc, vgpr(), c31, divisor)
+                 .getDst0Res();
+  // absA = (dividend ^ sa) - sa — two's-complement absolute value.
+  Value xorA = VXorB32::create(rewriter, loc, vgpr(), sa, dividend).getDst0Res();
+  Value absA = VSubU32::create(rewriter, loc, vgpr(), xorA, sa).getDst0Res();
+  // absB = (divisor ^ sb) - sb.
+  Value xorB = VXorB32::create(rewriter, loc, vgpr(), sb, divisor).getDst0Res();
+  Value absB = VSubU32::create(rewriter, loc, vgpr(), xorB, sb).getDst0Res();
+  auto [uq, ur] = emitUnsignedDivRem(rewriter, loc, op, absA, absB);
+  // qsign = sa ^ sb — quotient sign mask.
+  Value qsign = VXorB32::create(rewriter, loc, vgpr(), sa, sb).getDst0Res();
+  // q = (uq ^ qsign) - qsign — re-apply sign.
+  Value qxor = VXorB32::create(rewriter, loc, vgpr(), qsign, uq).getDst0Res();
+  Value q = VSubU32::create(rewriter, loc, vgpr(), qxor, qsign).getDst0Res();
+  // r = (ur ^ sa) - sa — remainder inherits dividend's sign.
+  Value rxor = VXorB32::create(rewriter, loc, vgpr(), sa, ur).getDst0Res();
+  Value r = VSubU32::create(rewriter, loc, vgpr(), rxor, sa).getDst0Res();
+  return {q, r};
+}
+
+//===----------------------------------------------------------------------===//
+// DivUIOpPattern / RemUIOpPattern
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+DivUIOpPattern::matchAndRewrite(lsir::DivUIOp op,
+                                PatternRewriter &rewriter) const {
+  if (op.getSemantics().getWidth() != 32)
+    return rewriter.notifyMatchFailure(
+        op, "only 32-bit integer divide is supported");
+  Value dst = op.getDst();
+  if (!isa<VGPRType>(dst.getType()))
+    return rewriter.notifyMatchFailure(
+        op, "nyi: non-VGPR destination for integer divide");
+  Location loc = op.getLoc();
+  Value dividend = toVGPR(rewriter, loc, op.getLhs());
+  Value divisor = toVGPR(rewriter, loc, op.getRhs());
+  auto [q, r] = emitUnsignedDivRem(rewriter, loc, op.getOperation(),
+                                   dividend, divisor);
+  Value result = lsir::CopyOp::create(rewriter, loc, dst, q).getTargetRes();
+  rewriter.replaceOp(op, result);
+  return success();
+}
+
+LogicalResult
+RemUIOpPattern::matchAndRewrite(lsir::RemUIOp op,
+                                PatternRewriter &rewriter) const {
+  if (op.getSemantics().getWidth() != 32)
+    return rewriter.notifyMatchFailure(
+        op, "only 32-bit integer remainder is supported");
+  Value dst = op.getDst();
+  if (!isa<VGPRType>(dst.getType()))
+    return rewriter.notifyMatchFailure(
+        op, "nyi: non-VGPR destination for integer remainder");
+  Location loc = op.getLoc();
+  Value dividend = toVGPR(rewriter, loc, op.getLhs());
+  Value divisor = toVGPR(rewriter, loc, op.getRhs());
+  auto [q, r] = emitUnsignedDivRem(rewriter, loc, op.getOperation(),
+                                   dividend, divisor);
+  Value result = lsir::CopyOp::create(rewriter, loc, dst, r).getTargetRes();
+  rewriter.replaceOp(op, result);
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// DivSIOpPattern / RemSIOpPattern
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+DivSIOpPattern::matchAndRewrite(lsir::DivSIOp op,
+                                PatternRewriter &rewriter) const {
+  if (op.getSemantics().getWidth() != 32)
+    return rewriter.notifyMatchFailure(
+        op, "only 32-bit signed integer divide is supported");
+  Value dst = op.getDst();
+  if (!isa<VGPRType>(dst.getType()))
+    return rewriter.notifyMatchFailure(
+        op, "nyi: non-VGPR destination for signed integer divide");
+  Location loc = op.getLoc();
+  Value dividend = toVGPR(rewriter, loc, op.getLhs());
+  Value divisor = toVGPR(rewriter, loc, op.getRhs());
+  auto [q, r] = emitSignedDivRem(rewriter, loc, op.getOperation(),
+                                 dividend, divisor);
+  Value result = lsir::CopyOp::create(rewriter, loc, dst, q).getTargetRes();
+  rewriter.replaceOp(op, result);
+  return success();
+}
+
+LogicalResult
+RemSIOpPattern::matchAndRewrite(lsir::RemSIOp op,
+                                PatternRewriter &rewriter) const {
+  if (op.getSemantics().getWidth() != 32)
+    return rewriter.notifyMatchFailure(
+        op, "only 32-bit signed integer remainder is supported");
+  Value dst = op.getDst();
+  if (!isa<VGPRType>(dst.getType()))
+    return rewriter.notifyMatchFailure(
+        op, "nyi: non-VGPR destination for signed integer remainder");
+  Location loc = op.getLoc();
+  Value dividend = toVGPR(rewriter, loc, op.getLhs());
+  Value divisor = toVGPR(rewriter, loc, op.getRhs());
+  auto [q, r] = emitSignedDivRem(rewriter, loc, op.getOperation(),
+                                 dividend, divisor);
+  Value result = lsir::CopyOp::create(rewriter, loc, dst, r).getTargetRes();
+  rewriter.replaceOp(op, result);
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // ToAMDGCNPass patterns
 //===----------------------------------------------------------------------===//
 
@@ -2195,6 +2461,7 @@ void mlir::aster::amdgcn::populateToAMDGCNPatterns(
       MinimumFOpPattern, MulFOpPattern, MulIOpPattern, MulHiSIOpPattern,
       OrIOpPattern, ShLIOpPattern, ShRSIOpPattern, ShRUIOpPattern,
       SubFOpPattern, SubIOpPattern, XOrIOpPattern,
+      DivUIOpPattern, RemUIOpPattern, DivSIOpPattern, RemSIOpPattern,
       // Memory ops.
       AllocaOpPattern, AssumeNoaliasOpPattern, LoadOpPattern, StoreOpPattern,
       // Data movement ops.
