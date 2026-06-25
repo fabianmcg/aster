@@ -214,6 +214,24 @@ amdgcn.module @vgpr_to_agpr_copy_not_expanded_mod target = <gfx942> {
 
 // -----
 
+// Positive case: lsir.copy from SCC to SGPR is lowered to s_mov_b32.
+
+// CHECK-LABEL: kernel @scc_to_sgpr_expands {
+// CHECK-DAG:     %[[S0:.*]] = alloca : !amdgcn.sgpr<0>
+// CHECK-DAG:     %[[SCC:.*]] = alloca : !amdgcn.scc<0>
+// CHECK:         s_mov_b32 outs(%[[S0]]) ins(%[[SCC]]) : outs(!amdgcn.sgpr<0>) ins(!amdgcn.scc<0>)
+// CHECK:         end_kernel
+amdgcn.module @scc_to_sgpr_expands_mod target = <gfx942> {
+  amdgcn.kernel @scc_to_sgpr_expands {
+    %tgt = alloca : !amdgcn.sgpr<0>
+    %src = alloca : !amdgcn.scc<0>
+    lsir.copy %tgt, %src : !amdgcn.sgpr<0>, !amdgcn.scc<0>
+    end_kernel
+  }
+}
+
+// -----
+
 // Negative case: AGPR-to-VGPR copy is not expanded because hardware requires
 // an explicit v_accvgpr_read_b32 for this transfer.
 

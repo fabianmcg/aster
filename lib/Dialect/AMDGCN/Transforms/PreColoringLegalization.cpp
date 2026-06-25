@@ -56,6 +56,9 @@ static void legalizeScalarCopyToSCC(lsir::CopyOp copyOp, IRRewriter &rewriter) {
   Location loc = copyOp.getLoc();
   Value c1 = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
   SCmpEqU32::create(rewriter, loc, target, source, c1);
+
+  if (Value res = copyOp.getTargetRes())
+    rewriter.replaceAllUsesWith(res, target);
   rewriter.eraseOp(copyOp);
 }
 
