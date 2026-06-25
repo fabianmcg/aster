@@ -30,6 +30,7 @@ declare_mlir_python_sources(ASTERPythonSources.core
     pass_pipelines.py
     test_pass_pipelines.py
     core/__init__.py
+    core/device.py
     core/target.py
     utils/__init__.py
     utils/env.py

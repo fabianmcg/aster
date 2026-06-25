@@ -25,6 +25,20 @@ def AsterUtils_AnyType :
 }
 
 //===----------------------------------------------------------------------===//
+// MaskTokenType
+//===----------------------------------------------------------------------===//
+
+def AsterUtils_MaskTokenType :
+  AsterUtils_Type<"MaskToken", "mask_token"> {
+  let summary = "Control-flow mask save/restore token";
+  let description = [{
+    An opaque token that pairs an `aster_utils.save_cf_mask` with its matching
+    `aster_utils.restore_cf_mask`. At codegen it converts to the SGPR register
+    that holds the saved EXEC mask.
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // StructType
 //===----------------------------------------------------------------------===//
 

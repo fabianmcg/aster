@@ -12,6 +12,8 @@
 
 #include "aster/Analysis/RegisterConstraints.h"
 #include "aster/Analysis/ThreadUniformAnalysis.h"
+#include "aster/Dialect/AMDGCN/IR/Utils.h"
+#include "aster/Dialect/AsterUtils/IR/AsterUtilsTypes.h"
 #include "aster/Dialect/LSIR/IR/LSIROps.h"
 #include "aster/Interfaces/RegisterType.h"
 #include "mlir/Analysis/DataFlow/Utils.h"
@@ -108,6 +110,12 @@ int64_t ConvertCodeGenState::getTypeSizeInBits(Type type) const {
 //===----------------------------------------------------------------------===//
 
 CodeGenConverter::CodeGenConverter(ConvertCodeGenState &state) : state(&state) {
+  // The control-flow mask token converts to the SGPR pair that holds the
+  // saved EXEC mask. The save pattern produces that SGPR as the token result,
+  // so the restore pattern receives it directly through its adaptor.
+  addConversion([](aster_utils::MaskTokenType t) -> Type {
+    return amdgcn::getSGPR(t.getContext(), /*size=*/2);
+  });
   // Add generic source and target materializations.
   addSourceMaterialization([&](OpBuilder &builder, Type resultType,
                                ValueRange inputs, Location loc) -> Value {

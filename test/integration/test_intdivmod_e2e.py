@@ -1,8 +1,9 @@
 """End-to-end test for integer unsigned divide and modulo.
 
-Runs a GPU kernel that computes per-lane unsigned division and modulo using the
-lsir.divui / lsir.remui ops lowered to AMDGCN via the Newton-Raphson reciprocal
-sequence. Checks that GPU results match NumPy reference on random inputs.
+Runs a GPU kernel that computes per-lane unsigned division and modulo
+using the lsir.divui / lsir.remui ops lowered to AMDGCN via the Newton-
+Raphson reciprocal sequence. Checks that GPU results match NumPy
+reference on random inputs.
 """
 
 import numpy as np

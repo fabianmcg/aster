@@ -18,6 +18,7 @@
 
 #include "aster/Transforms/Passes.h"
 
+#include "aster/Dialect/AsterUtils/IR/AsterUtilsOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -31,6 +32,7 @@ namespace mlir::aster {
 } // namespace mlir::aster
 
 using namespace mlir;
+using namespace mlir::aster::aster_utils;
 
 namespace {
 //===----------------------------------------------------------------------===//
@@ -49,6 +51,9 @@ private:
 
   /// Convert a scf.if operation to CF dialect control flow.
   LogicalResult convertIfOp(scf::IfOp ifOp);
+
+  /// Convert a scf.while operation to CF dialect control flow.
+  LogicalResult convertWhileOp(scf::WhileOp whileOp);
 };
 
 LogicalResult ConvertSCFControlFlow::convertForOp(scf::ForOp forOp) {
@@ -174,10 +179,21 @@ LogicalResult ConvertSCFControlFlow::convertIfOp(scf::IfOp ifOp) {
   for (Value result : ifOp.getResults())
     bbMerge->addArgument(result.getType(), loc);
 
-  // Create conditional branch: if cond, then block; else block (or merge).
+  // Save the CF mask before branching and use the narrowed condition for the
+  // branch. The token threads from the predecessor block to bbMerge where the
+  // matching restore closes the saved EXEC mask.
   rewriter.setInsertionPoint(ifOp);
-  cf::CondBranchOp::create(rewriter, loc, condition, bbThen, ValueRange(),
+  SaveCFMaskOp saveOp = SaveCFMaskOp::create(rewriter, loc, condition);
+  Value passthroughCond = saveOp.getPassthroughCondition();
+  Value token = saveOp.getToken();
+
+  // Create conditional branch: if cond, then block; else block (or merge).
+  cf::CondBranchOp::create(rewriter, loc, passthroughCond, bbThen, ValueRange(),
                            bbElse, ValueRange());
+
+  // Narrow EXEC to then-lanes before running the then body.
+  rewriter.setInsertionPointToEnd(bbThen);
+  SetCFMaskOp::create(rewriter, loc, condition, /*invert=*/UnitAttr());
 
   // Inline then region into bbThen and branch to merge.
   rewriter.inlineBlockBefore(thenBlock, bbThen, bbThen->end());
@@ -186,13 +202,114 @@ LogicalResult ConvertSCFControlFlow::convertIfOp(scf::IfOp ifOp) {
 
   // Inline else region into bbElse and branch to merge.
   if (hasElse) {
+    // Narrow EXEC to else-lanes (complement of then-lanes) before running the
+    // else body. The condition dominates bbElse because it is defined in the
+    // predecessor block.
+    rewriter.setInsertionPointToEnd(bbElse);
+    SetCFMaskOp::create(rewriter, loc, condition,
+                        /*invert=*/rewriter.getUnitAttr());
     rewriter.inlineBlockBefore(elseBlock, bbElse, bbElse->end());
     rewriter.setInsertionPointToEnd(bbElse);
     cf::BranchOp::create(rewriter, loc, bbMerge, elseYieldOperands);
   }
 
+  // Restore the CF mask at the top of the merge block, after all wiring is
+  // done. The token dominates bbMerge because it is defined in the predecessor
+  // block (the block containing the original ifOp).
+  rewriter.setInsertionPointToStart(bbMerge);
+  RestoreCFMaskOp::create(rewriter, loc, token);
+
   // Replace ifOp results with bbMerge's block arguments.
   rewriter.replaceOp(ifOp, bbMerge->getArguments());
+  return success();
+}
+
+LogicalResult ConvertSCFControlFlow::convertWhileOp(scf::WhileOp whileOp) {
+  Location loc = whileOp.getLoc();
+  IRRewriter rewriter(whileOp);
+
+  Block *beforeBlock = whileOp.getBeforeBody();
+  Block *afterBlock = whileOp.getAfterBody();
+
+  // Capture the terminators and their operands before modifying the regions.
+  scf::ConditionOp conditionOp = whileOp.getConditionOp();
+  Value condition = conditionOp.getCondition();
+  SmallVector<Value> conditionArgs(conditionOp.getArgs());
+
+  scf::YieldOp yieldOp = whileOp.getYieldOp();
+  SmallVector<Value> yieldOperands(yieldOp.getOperands());
+
+  // Create the basic blocks: bbPre -> bbBefore -> bbAfter -> bbEnd.
+  Block *bbPre = whileOp->getBlock();
+  Block *bbEnd = rewriter.splitBlock(bbPre, std::next(whileOp->getIterator()));
+  Block *bbBefore = rewriter.createBlock(bbEnd);
+  Block *bbAfter = rewriter.createBlock(bbEnd);
+
+  // bbBefore takes the init-typed arguments; bbEnd takes the result-typed
+  // arguments (the loop results).
+  for (Value init : whileOp.getInits())
+    bbBefore->addArgument(init.getType(), loc);
+  for (Value result : whileOp.getResults())
+    bbEnd->addArgument(result.getType(), loc);
+
+  // Entry edge: branch from bbPre into the before region with the inits.
+  rewriter.setInsertionPointToEnd(bbPre);
+  cf::BranchOp::create(rewriter, loc, bbBefore, whileOp.getInits());
+
+  // Build an IRMapping to remap the captured condition values after inlining.
+  IRMapping beforeIRMapping;
+  for (auto [oldArg, newArg] :
+       llvm::zip(whileOp.getBeforeArguments(), bbBefore->getArguments()))
+    beforeIRMapping.map(oldArg, newArg);
+
+  // Erase the before-region terminator before inlining so the block has no
+  // terminator and we can append the cond_br afterward.
+  rewriter.eraseOp(conditionOp);
+
+  // Inline the before region into bbBefore.
+  rewriter.inlineBlockBefore(beforeBlock, bbBefore, bbBefore->end(),
+                             bbBefore->getArguments());
+
+  // Remap captured condition values: they may reference old block args.
+  condition = beforeIRMapping.lookupOrDefault(condition);
+  for (Value &val : conditionArgs)
+    val = beforeIRMapping.lookupOrDefault(val);
+
+  // Add result-typed arguments to bbAfter (matches the condition forwarded
+  // operand types, which equal the while result types).
+  for (Value result : whileOp.getResults())
+    bbAfter->addArgument(result.getType(), loc);
+
+  // Conditional branch: if condition, enter the after region forwarding the
+  // condition args; else exit to bbEnd with the same forwarded values.
+  rewriter.setInsertionPointToEnd(bbBefore);
+  cf::CondBranchOp::create(rewriter, loc, condition, bbAfter, conditionArgs,
+                           bbEnd, conditionArgs);
+
+  // Build an IRMapping to remap the captured yield operands after inlining.
+  IRMapping afterIRMapping;
+  for (auto [oldArg, newArg] :
+       llvm::zip(whileOp.getAfterArguments(), bbAfter->getArguments()))
+    afterIRMapping.map(oldArg, newArg);
+
+  // Erase the after-region terminator before inlining.
+  rewriter.eraseOp(yieldOp);
+
+  // Inline the after region into bbAfter.
+  rewriter.inlineBlockBefore(afterBlock, bbAfter, bbAfter->end(),
+                             bbAfter->getArguments());
+
+  // Remap captured yield operands.
+  for (Value &val : yieldOperands)
+    val = afterIRMapping.lookupOrDefault(val);
+
+  // Back-edge: branch from the after region back to the before region with the
+  // yielded values as the new before arguments.
+  rewriter.setInsertionPointToEnd(bbAfter);
+  cf::BranchOp::create(rewriter, loc, bbBefore, yieldOperands);
+
+  // Replace the while results with bbEnd's block arguments.
+  rewriter.replaceOp(whileOp, bbEnd->getArguments());
   return success();
 }
 
@@ -205,7 +322,7 @@ void ConvertSCFControlFlow::runOnOperation() {
   // while inner SCF ops remain intact for later conversion.
   SmallVector<Operation *> scfOps;
   op->walk([&](Operation *nestedOp) {
-    if (isa<scf::ForOp, scf::IfOp>(nestedOp))
+    if (isa<scf::ForOp, scf::IfOp, scf::WhileOp>(nestedOp))
       scfOps.push_back(nestedOp);
   });
   std::reverse(scfOps.begin(), scfOps.end());
@@ -217,6 +334,8 @@ void ConvertSCFControlFlow::runOnOperation() {
       result = convertForOp(forOp);
     else if (auto ifOp = dyn_cast<scf::IfOp>(scfOp))
       result = convertIfOp(ifOp);
+    else if (auto whileOp = dyn_cast<scf::WhileOp>(scfOp))
+      result = convertWhileOp(whileOp);
     if (failed(result)) {
       signalPassFailure();
       return;

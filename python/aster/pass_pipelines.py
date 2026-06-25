@@ -15,6 +15,7 @@ class PipelineConfigProtocol(Protocol):
     hoist_wait: bool
     set_mfma_priority: bool
     rotate_stage: int | None
+    scf_pipeline: bool
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class PipelineConfig(PipelineConfigProtocol):
     hoist_wait: bool = False
     set_mfma_priority: bool = False
     rotate_stage: int | None = None
+    scf_pipeline: bool = True
 
 
 # --------------------------------------------------------------------------- #
@@ -307,16 +309,22 @@ def make_default_pass_pipeline(
         num_vgprs: Max VGPRs for backend (default: 256).
         num_agprs: Max AGPRs for backend (default: 256).
     """
-    return builtin_module(
-        PHASE_PRE_SCHEDULING_CLEANUP,
-        PHASE_CONSTEXPR_EXPANSION,
+    use_scf_pipeline = getattr(mapping, "scf_pipeline", True)
+    scf_phase = (
         phase_scf_pipelining(
             lcm_unroll=mapping.lcm_unroll,
             unroll_factor_multiplier=mapping.unroll_factor_multiplier,
             epilogue_peeling=mapping.epilogue_peeling,
             prologue_peeling=mapping.prologue_peeling,
             rotate_stage=mapping.rotate_stage,
-        ),
+        )
+        if use_scf_pipeline
+        else ()
+    )
+    return builtin_module(
+        PHASE_PRE_SCHEDULING_CLEANUP,
+        PHASE_CONSTEXPR_EXPANSION,
+        scf_phase,
         "aster-destructure-struct-iter-args",
         "canonicalize",
         "cse",

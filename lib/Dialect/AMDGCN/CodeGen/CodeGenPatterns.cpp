@@ -334,6 +334,12 @@ static Type convertTypeImpl(Value value, const CodeGenConverter &converter) {
     return amdgcn::getLaneMaskType(value);
   }
 
+  // Types without data layout (e.g. token, dialect-specific opaque types)
+  // are not register-mapped and pass through unchanged.
+  if (!isa<DataLayoutTypeInterface>(value.getType()) &&
+      !value.getType().isIntOrFloat())
+    return value.getType();
+
   int64_t typeSize = converter.getTypeSize(value.getType());
   int64_t numWords = (typeSize + 3) / 4;
 
@@ -362,6 +368,9 @@ static Type convertTypeImpl(Value value, const CodeGenConverter &converter) {
 
 static Type convertTypeImpl(Type type, const CodeGenConverter &converter) {
   if (isa<RegisterTypeInterface>(type))
+    return type;
+  // Types without data layout pass through unchanged.
+  if (!isa<DataLayoutTypeInterface>(type) && !type.isIntOrFloat())
     return type;
   int64_t typeSize = converter.getTypeSize(type);
   int64_t numWords = (typeSize + 3) / 4;

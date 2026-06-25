@@ -146,3 +146,25 @@ func.func @test_muli_four(%a: index, %b: index, %c: index, %d: index) -> index {
   %0 = aster_utils.muli %a, %b, %c, %d : index
   return %0 : index
 }
+
+//===----------------------------------------------------------------------===//
+// SaveCFMaskOp / RestoreCFMaskOp roundtrip tests
+//===----------------------------------------------------------------------===//
+
+// Save the CF mask before a divergent branch and restore it afterwards.
+func.func @test_cf_mask_save_restore(%cond: i1) {
+  %narrow, %tok = aster_utils.save_cf_mask %cond : (i1) -> (i1, !aster_utils.mask_token)
+  aster_utils.restore_cf_mask %tok : !aster_utils.mask_token
+  return
+}
+
+//===----------------------------------------------------------------------===//
+// SetCFMaskOp roundtrip tests
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: @test_set_cf_mask
+func.func @test_set_cf_mask(%cond: i1) {
+  aster_utils.set_cf_mask %cond : i1
+  aster_utils.set_cf_mask %cond invert : i1
+  return
+}

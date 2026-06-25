@@ -100,15 +100,12 @@ LogicalResult LegalizeCF::lowerCondBranch(lsir::CondBranchOp condBr) {
     else
       SCbranchScc0::create(rewriter, loc, flagReg, falseDest, trueDest);
   } else {
-    // TODO: neither destination is the next block, we need more sophisticated
-    // logic to insert explicit branch and create a new block. For this to
-    // happen we need to first stabilize reg-alloc output guarantees (i.e. the
-    // BBarg erasure needs to happen in the absence of SSA values flowing).
-    // For now, emit an error if we reach such a case. The current behavior is
-    // enough to model `scf.for` loops.
-    return condBr.emitError()
-           << "neither lsir.cond_br destination is the next physical block; "
-           << "block reordering not yet implemented";
+    // Neither destination is the next physical block. The assembler appends
+    // s_branch falseDest automatically (see printCondBr).
+    if (isVector)
+      SCbranchVccnz::create(rewriter, loc, flagReg, trueDest, falseDest);
+    else
+      SCbranchScc1::create(rewriter, loc, flagReg, trueDest, falseDest);
   }
 
   // Erase the original lsir.cond_br.
@@ -154,7 +151,8 @@ void LegalizeCF::runOnOperation() {
     }
   }
 
-  // Collect all branch operations to lower.
+  // Collect all branch ops first, then lower them. Lowering never creates new
+  // branch ops so new blocks are not re-visited.
   SmallVector<lsir::CondBranchOp> condBranches;
   SmallVector<lsir::BranchOp> branches;
   op->walk([&](Operation *innerOp) {

@@ -23,6 +23,7 @@ include "mlir/Interfaces/InferIntRangeInterface.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/ValueBoundsOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
+include "mlir/IR/BuiltinTypes.td"
 
 //===----------------------------------------------------------------------===//
 // AssumeRangeOp
@@ -374,6 +375,63 @@ def AsterUtils_MuliOp : AsterUtils_Op<"muli", [
     $inputs attr-dict `:` type($result)
   }];
   let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// SaveCFMaskOp
+//===----------------------------------------------------------------------===//
+
+def AsterUtils_SaveCFMaskOp : AsterUtils_Op<"save_cf_mask", []> {
+  let summary = "Snapshot the control-flow mask before a divergent branch";
+  let description = [{
+    Snapshots the hardware EXEC mask into an opaque token via `s_mov_b64 saved,
+    exec`. The branch condition is passed through unchanged without narrowing.
+    Returns the passthrough condition and the token used to pair with a matching
+    `restore_cf_mask`. Has no listed side effects. Lowers to `s_mov_b64` for
+    both uniform and divergent regions.
+  }];
+  let arguments = (ins I1:$condition);
+  let results = (outs I1:$passthroughCondition, AsterUtils_MaskTokenType:$token);
+  let assemblyFormat = [{
+    $condition attr-dict `:` functional-type($condition, results)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// RestoreCFMaskOp
+//===----------------------------------------------------------------------===//
+
+def AsterUtils_RestoreCFMaskOp : AsterUtils_Op<"restore_cf_mask", []> {
+  let summary = "Restore the control-flow mask after a divergent region";
+  let description = [{
+    Models exit from a (potentially divergent) region, restoring EXEC saved by
+    the paired `save_cf_mask`. Has no listed side effects. Lowers to
+    `s_mov_b64 exec, saved` for uniform regions and `s_or_b64 exec, exec, saved`
+    for divergent regions.
+  }];
+  let arguments = (ins AsterUtils_MaskTokenType:$token);
+  let results = (outs);
+  let assemblyFormat = [{ $token attr-dict `:` type($token) }];
+}
+
+//===----------------------------------------------------------------------===//
+// SetCFMaskOp
+//===----------------------------------------------------------------------===//
+
+def AsterUtils_SetCFMaskOp : AsterUtils_Op<"set_cf_mask", []> {
+  let summary = "Narrow the control-flow mask to a (possibly inverted) condition";
+  let description = [{
+    Narrows the live EXEC mask using the branch condition: EXEC = cond & EXEC.
+    When `invert` is present the complement is used: EXEC = ~cond & EXEC, selecting
+    the else-lanes. Has no listed side effects. Lowers to `s_and_b64` (or
+    `s_andn2_b64` when inverted) for divergent regions and is erased for uniform
+    regions.
+  }];
+  let arguments = (ins I1:$condition, UnitAttr:$invert);
+  let results = (outs);
+  let assemblyFormat = [{
+    $condition (`invert` $invert^)? attr-dict `:` type($condition)
+  }];
 }
 
 #endif // ASTER_DIALECT_ASTERUTILS_IR_ASTERUTILSOPS_TD

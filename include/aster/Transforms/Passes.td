@@ -367,7 +367,8 @@ def ConvertSCFControlFlow : Pass<"aster-convert-scf-control-flow"> {
   let dependentDialects = [
     "mlir::arith::ArithDialect",
     "mlir::cf::ControlFlowDialect",
-    "mlir::scf::SCFDialect"
+    "mlir::scf::SCFDialect",
+    "mlir::aster::aster_utils::AsterUtilsDialect"
   ];
 }
 

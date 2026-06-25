@@ -195,6 +195,46 @@ amdgcn.module @test_loop target = <gfx942> {
 
 // -----
 
+// Test: SCC conditional branch where neither trueDest nor falseDest is the next
+// block (^bb2 follows the branch block ^bb1, but targets are ^bb3 and ^bb4).
+// The pass emits s_cbranch_scc1 directly; the printer appends s_branch to
+// falseDest. No trampoline block is created.
+
+// CHECK-LABEL: kernel @test_non_adjacent
+// CHECK:         s_branch ^bb1
+// CHECK:       ^bb1:
+// CHECK:         s_cmp_lt_i32
+// CHECK:         s_cbranch_scc1 %{{.*}}, true(^bb3) false(^bb4)
+// CHECK:       ^bb2:
+// CHECK:         end_kernel
+// CHECK:       ^bb3:
+// CHECK:         end_kernel
+// CHECK:       ^bb4:
+// CHECK:         end_kernel
+amdgcn.module @test_non_adjacent target = <gfx942> {
+  amdgcn.kernel @test_non_adjacent attributes {normal_forms = [#amdgcn.all_registers_allocated]} {
+    %c0 = arith.constant 0 : i32
+    %c10 = arith.constant 10 : i32
+    %s0 = alloca : !amdgcn.sgpr<0>
+    %s1 = alloca : !amdgcn.sgpr<1>
+    %scc = alloca : !amdgcn.scc<0>
+    s_mov_b32 outs(%s0) ins(%c0) : outs(!amdgcn.sgpr<0>) ins(i32)
+    s_mov_b32 outs(%s1) ins(%c10) : outs(!amdgcn.sgpr<1>) ins(i32)
+    lsir.br ^bb1
+  ^bb1:
+    s_cmp_lt_i32 outs(%scc) ins(%s0, %s1) : outs(!amdgcn.scc<0>) ins(!amdgcn.sgpr<0>, !amdgcn.sgpr<1>)
+    lsir.cond_br %scc : !amdgcn.scc<0>, ^bb3, ^bb4
+  ^bb2:
+    end_kernel
+  ^bb3:
+    end_kernel
+  ^bb4:
+    end_kernel
+  }
+}
+
+// -----
+
 // Test: VCC conditional branch where falseDest (^bb1) is the next block.
 // Uses s_cbranch_vccnz to branch to ^bb2 when VCC!=0, falling through to ^bb1.
 

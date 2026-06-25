@@ -184,6 +184,38 @@ struct RegConstraintPattern : public OpCodeGenPattern<RegConstraintOp> {
 };
 
 //===----------------------------------------------------------------------===//
+// SaveCFMaskOpPattern
+//===----------------------------------------------------------------------===//
+struct SaveCFMaskOpPattern
+    : public OpCodeGenPattern<aster_utils::SaveCFMaskOp> {
+  using OpCodeGenPattern::OpCodeGenPattern;
+  LogicalResult
+  matchAndRewrite(Op op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override;
+};
+
+//===----------------------------------------------------------------------===//
+// RestoreCFMaskOpPattern
+//===----------------------------------------------------------------------===//
+struct RestoreCFMaskOpPattern
+    : public OpCodeGenPattern<aster_utils::RestoreCFMaskOp> {
+  using OpCodeGenPattern::OpCodeGenPattern;
+  LogicalResult
+  matchAndRewrite(Op op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override;
+};
+
+//===----------------------------------------------------------------------===//
+// SetCFMaskOpPattern
+//===----------------------------------------------------------------------===//
+struct SetCFMaskOpPattern : public OpCodeGenPattern<aster_utils::SetCFMaskOp> {
+  using OpCodeGenPattern::OpCodeGenPattern;
+  LogicalResult
+  matchAndRewrite(Op op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override;
+};
+
+//===----------------------------------------------------------------------===//
 // AssumeRangeOpPattern
 //===----------------------------------------------------------------------===//
 struct AssumeRangeOpPattern
@@ -453,6 +485,140 @@ LogicalResult FromToRegOpPattern<OpTy>::matchAndRewrite(
 }
 
 //===----------------------------------------------------------------------===//
+// SaveCFMaskOpPattern
+//===----------------------------------------------------------------------===//
+
+/// Create an allocated EXEC destination. EXEC is the only register that codegen
+/// may produce in allocated form; physical register 0 is its fixed address.
+static Value createExecDst(OpBuilder &builder, Location loc, Operation *op) {
+  MLIRContext *ctx = builder.getContext();
+  RegisterTypeInterface execTy =
+      amdgcn::isWave32(op)
+          ? RegisterTypeInterface(amdgcn::EXECLoType::get(ctx, Register(0)))
+          : RegisterTypeInterface(amdgcn::EXECType::get(ctx, Register(0)));
+  return amdgcn::createAllocation(builder, loc, execTy);
+}
+
+/// Create an allocated EXEC source. EXECType only accepts allocated semantics
+/// (it does not have AcceptsValueSemantics or AcceptsUnallocatedSemantics), so
+/// both source and destination references must use physical register 0.
+static Value createExecSrc(OpBuilder &builder, Location loc, Operation *op) {
+  MLIRContext *ctx = builder.getContext();
+  RegisterTypeInterface execTy =
+      amdgcn::isWave32(op)
+          ? RegisterTypeInterface(amdgcn::EXECLoType::get(ctx, Register(0)))
+          : RegisterTypeInterface(amdgcn::EXECType::get(ctx, Register(0)));
+  return amdgcn::createAllocation(builder, loc, execTy);
+}
+
+/// Create a value-semantics SCC result. SCC is a fixed hardware register but
+/// codegen must not pin it to an allocated form — only EXEC is exempt.
+static Value createSCCValue(OpBuilder &builder, Location loc) {
+  return amdgcn::createAllocation(
+      builder, loc, amdgcn::SCCType::get(builder.getContext(), Register()));
+}
+
+LogicalResult SaveCFMaskOpPattern::matchAndRewrite(
+    Op op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const {
+  if (amdgcn::isWave32(op))
+    return rewriter.notifyMatchFailure(
+        op, "wave32 save_cf_mask lowering is not implemented");
+  Location loc = op.getLoc();
+  MLIRContext *ctx = rewriter.getContext();
+  Value cond = adaptor.getCondition();
+
+  // Divergent conditions have lane-mask type (VCC on wave64, VCC_LO on
+  // wave32). Everything else (SCC, i1 from constant-folded cmpi) is uniform.
+  bool isDivergent = isa<amdgcn::VCCType, amdgcn::VCCLoType>(cond.getType());
+
+  // Ensure the condition is in SCC form for uniform paths.
+  if (!isDivergent && !isa<amdgcn::SCCType>(cond.getType())) {
+    Type sccTy = amdgcn::SCCType::get(ctx, Register());
+    Value sccDst = lsir::AllocaOp::create(rewriter, loc, sccTy);
+    cond = lsir::MovOp::create(rewriter, loc, sccDst, cond).getDstRes();
+  }
+
+  // Always snapshot EXEC via s_mov_b64 saved, exec. The downstream restore
+  // uses the divergent_cf attribute to pick s_or_b64 vs s_mov_b64.
+  RegisterTypeInterface sgprPairTy = amdgcn::getSGPR(ctx, /*size=*/2);
+  Value savedDst = amdgcn::createAllocation(rewriter, loc, sgprPairTy);
+  Value execSrc = createExecSrc(rewriter, loc, op);
+  Operation *savedOp =
+      amdgcn::SMovB64::create(rewriter, loc, savedDst, execSrc).getOperation();
+  if (isDivergent)
+    savedOp->setDiscardableAttr("aster.divergent_cf", rewriter.getUnitAttr());
+  Value saved = savedOp->getResult(0);
+  rewriter.replaceOp(op, {cond, saved});
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// RestoreCFMaskOpPattern
+//===----------------------------------------------------------------------===//
+
+LogicalResult RestoreCFMaskOpPattern::matchAndRewrite(
+    Op op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const {
+  if (amdgcn::isWave32(op))
+    return rewriter.notifyMatchFailure(
+        op, "wave32 restore_cf_mask lowering is not implemented");
+  Location loc = op.getLoc();
+  // The token is the SGPR pair holding the saved EXEC mask. Inspect the
+  // defining op to select the cheaper restore for the uniform case: if the
+  // token was produced by s_mov_b64 (uniform snapshot), EXEC was never
+  // narrowed so a plain move suffices. Otherwise (s_and_saveexec_b64,
+  // divergent), the OR-back is required to restore all active lanes.
+  Value saved = adaptor.getToken();
+  Value execDst = createExecDst(rewriter, loc, op);
+  Operation *savedDef = saved.getDefiningOp();
+  // Divergent saves are tagged with "aster.divergent_cf"; absent means uniform.
+  bool isDivergent =
+      savedDef && savedDef->getDiscardableAttr("aster.divergent_cf");
+  if (!isDivergent) {
+    // Uniform path: EXEC was only snapshotted, not narrowed, so a plain move
+    // restores it without a redundant OR.
+    amdgcn::SMovB64::create(rewriter, loc, execDst, saved);
+    rewriter.eraseOp(op);
+    return success();
+  }
+  Value sccVal = createSCCValue(rewriter, loc);
+  Value execSrc = createExecSrc(rewriter, loc, op);
+  amdgcn::SOrB64::create(rewriter, loc, execDst, sccVal, execSrc, saved);
+  rewriter.eraseOp(op);
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// SetCFMaskOpPattern
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+SetCFMaskOpPattern::matchAndRewrite(Op op, OpAdaptor adaptor,
+                                    ConversionPatternRewriter &rewriter) const {
+  Value cond = adaptor.getCondition();
+  bool isDivergent = isa<amdgcn::VCCType, amdgcn::VCCLoType>(cond.getType());
+  // Uniform conditions require no EXEC narrowing.
+  if (!isDivergent) {
+    rewriter.eraseOp(op);
+    return success();
+  }
+  if (amdgcn::isWave32(op))
+    return rewriter.notifyMatchFailure(
+        op, "wave32 set_cf_mask lowering is not implemented");
+  Location loc = op.getLoc();
+  Value execDst = createExecDst(rewriter, loc, op);
+  Value sccVal = createSCCValue(rewriter, loc);
+  Value execSrc = createExecSrc(rewriter, loc, op);
+  if (op.getInvert())
+    // s_andn2_b64 exec, exec, cond -> EXEC = ~cond & EXEC (else-lanes).
+    amdgcn::SAndn2B64::create(rewriter, loc, execDst, sccVal, execSrc, cond);
+  else
+    // s_and_b64 exec, cond, exec -> EXEC = cond & EXEC (then-lanes).
+    amdgcn::SAndB64::create(rewriter, loc, execDst, sccVal, cond, execSrc);
+  rewriter.eraseOp(op);
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // API
 //===----------------------------------------------------------------------===//
 
@@ -471,7 +637,9 @@ void mlir::aster::lsir::populateCodeGenPatterns(CodeGenConverter &converter,
   target.addDynamicallyLegalOp<RegConstraintOp>(
       [&](RegConstraintOp op) { return converter.isLegal(op); });
   target.addIllegalOp<aster_utils::AssumeRangeOp, aster_utils::AssumeUniformOp,
-                      lsir::FromRegOp, lsir::ToRegOp, lsir::RegConstraintOp>();
+                      aster_utils::SaveCFMaskOp, aster_utils::RestoreCFMaskOp,
+                      aster_utils::SetCFMaskOp, lsir::FromRegOp, lsir::ToRegOp,
+                      lsir::RegConstraintOp>();
   target.addLegalOp<UnrealizedConversionCastOp>();
 
   // Function ops are dynamically legal.
@@ -527,7 +695,8 @@ void mlir::aster::lsir::populateCodeGenPatterns(CodeGenConverter &converter,
                // lsir.cmpi (DPS, SCC/VCC dst); cf.br/cf.cond_br are replaced
                // by lsir.br/lsir.cond_br that carry register conditions.
                ArithCmpIOpPattern, ArithCmpFOpPattern, CFCondBranchOpPattern,
-               CFBranchOpPattern, KernelOpConversion, AssumeUniformOpPattern
+               CFBranchOpPattern, KernelOpConversion, AssumeUniformOpPattern,
+               SaveCFMaskOpPattern, RestoreCFMaskOpPattern, SetCFMaskOpPattern
                // That's all folks!
                >(converter);
   // Special generic pattern: converts operations by converting
