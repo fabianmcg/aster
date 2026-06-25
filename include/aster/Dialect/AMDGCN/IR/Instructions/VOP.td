@@ -1655,6 +1655,144 @@ def VCvtU32F32 : VOP1Out1In1Inst<"v_cvt_u32_f32",
 }
 #endif // VCVTU32F32_DEF
 
+#ifndef VCVTF32F64_DEF
+#define VCVTF32F64_DEF
+def VCvtF32F64 : VOP1Out1In1Inst<"v_cvt_f32_f64",
+    /*dst0=*/[VGPROf<1>],
+    /*src0=*/[TwoGPROrVCCOrFPConstType,
+             TwoGPROrVCCOrFPLitOf<InlineLitFP<[F64]>>]
+  > {
+  let archs = [CDNA3Isa, CDNA4Isa];
+  let description = [{
+    Convert from a double-precision float input to a single-precision float
+    value and store the result into a vector register.
+  }];
+  let encodings = [
+    InstEnc<[ENC_VOP1_CDNA3, ENC_VOP1_CDNA4], 0b00001111, (pred
+      TwoGPROrVCCOrFPConstType:$src0
+    )>,
+    InstEnc<[ENC_VOP3_CDNA3, ENC_VOP3_CDNA4], 0b0110001111, (pred
+      TwoGPROrVCCOrFPLitOf<InlineLitFP<[F64]>>:$src0
+    )>
+  ];
+}
+#endif // VCVTF32F64_DEF
+
+#ifndef VCVTF64F32_DEF
+#define VCVTF64F32_DEF
+def VCvtF64F32 : VOP1Out1In1Inst<"v_cvt_f64_f32",
+    /*dst0=*/[VGPROf<2>],
+    /*src0=*/[OneGPROrSRegOrConstOf<InlineLitFP<[F32]>, F32>,
+             OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>]
+  > {
+  let archs = [CDNA3Isa, CDNA4Isa];
+  let description = [{
+    Convert from a single-precision float input to a double-precision float
+    value and store the result into a vector register.
+  }];
+  let encodings = [
+    InstEnc<[ENC_VOP1_CDNA3, ENC_VOP1_CDNA4], 0b00010000, (pred
+      OneGPROrSRegOrConstOf<InlineLitFP<[F32]>, F32>:$src0
+    )>,
+    InstEnc<[ENC_VOP3_CDNA3, ENC_VOP3_CDNA4], 0b0110010000, (pred
+      OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>:$src0
+    )>
+  ];
+}
+#endif // VCVTF64F32_DEF
+
+#ifndef VCVTF64I32_DEF
+#define VCVTF64I32_DEF
+def VCvtF64I32 : VOP1Out1In1Inst<"v_cvt_f64_i32",
+    /*dst0=*/[VGPROf<2>],
+    /*src0=*/[OneGPROrSRegOrConstOf<InlineLitInt<[IntType<32>]>, IntType<32>>,
+             OneGPROrSRegOrLitOf<InlineLitInt<[IntType<32>]>>]
+  > {
+  let archs = [CDNA3Isa, CDNA4Isa];
+  let description = [{
+    Convert from a signed 32-bit integer input to a double-precision float
+    value and store the result into a vector register.
+  }];
+  let encodings = [
+    InstEnc<[ENC_VOP1_CDNA3, ENC_VOP1_CDNA4], 0b00000100, (pred
+      OneGPROrSRegOrConstOf<InlineLitInt<[IntType<32>]>, IntType<32>>:$src0
+    )>,
+    InstEnc<[ENC_VOP3_CDNA3, ENC_VOP3_CDNA4], 0b0110000100, (pred
+      OneGPROrSRegOrLitOf<InlineLitInt<[IntType<32>]>>:$src0
+    )>
+  ];
+}
+#endif // VCVTF64I32_DEF
+
+#ifndef VCVTF64U32_DEF
+#define VCVTF64U32_DEF
+def VCvtF64U32 : VOP1Out1In1Inst<"v_cvt_f64_u32",
+    /*dst0=*/[VGPROf<2>],
+    /*src0=*/[OneGPROrSRegOrConstOf<InlineLitInt<[IntType<32>]>, IntType<32>>,
+             OneGPROrSRegOrLitOf<InlineLitInt<[IntType<32>]>>]
+  > {
+  let archs = [CDNA3Isa, CDNA4Isa];
+  let description = [{
+    Convert from an unsigned 32-bit integer input to a double-precision float
+    value and store the result into a vector register.
+  }];
+  let encodings = [
+    InstEnc<[ENC_VOP1_CDNA3, ENC_VOP1_CDNA4], 0b00010110, (pred
+      OneGPROrSRegOrConstOf<InlineLitInt<[IntType<32>]>, IntType<32>>:$src0
+    )>,
+    InstEnc<[ENC_VOP3_CDNA3, ENC_VOP3_CDNA4], 0b0110010110, (pred
+      OneGPROrSRegOrLitOf<InlineLitInt<[IntType<32>]>>:$src0
+    )>
+  ];
+}
+#endif // VCVTF64U32_DEF
+
+#ifndef VCVTI32F64_DEF
+#define VCVTI32F64_DEF
+def VCvtI32F64 : VOP1Out1In1Inst<"v_cvt_i32_f64",
+    /*dst0=*/[VGPROf<1>],
+    /*src0=*/[TwoGPROrVCCOrFPConstType,
+             TwoGPROrVCCOrFPLitOf<InlineLitFP<[F64]>>]
+  > {
+  let archs = [CDNA3Isa, CDNA4Isa];
+  let description = [{
+    Convert from a double-precision float input to a signed 32-bit integer
+    value and store the result into a vector register.
+  }];
+  let encodings = [
+    InstEnc<[ENC_VOP1_CDNA3, ENC_VOP1_CDNA4], 0b00000011, (pred
+      TwoGPROrVCCOrFPConstType:$src0
+    )>,
+    InstEnc<[ENC_VOP3_CDNA3, ENC_VOP3_CDNA4], 0b0110000011, (pred
+      TwoGPROrVCCOrFPLitOf<InlineLitFP<[F64]>>:$src0
+    )>
+  ];
+}
+#endif // VCVTI32F64_DEF
+
+#ifndef VCVTU32F64_DEF
+#define VCVTU32F64_DEF
+def VCvtU32F64 : VOP1Out1In1Inst<"v_cvt_u32_f64",
+    /*dst0=*/[VGPROf<1>],
+    /*src0=*/[TwoGPROrVCCOrFPConstType,
+             TwoGPROrVCCOrFPLitOf<InlineLitFP<[F64]>>]
+  > {
+  let archs = [CDNA3Isa, CDNA4Isa];
+  let description = [{
+    Convert from a double-precision float input to an unsigned 32-bit integer
+    value and store the result into a vector register.
+  }];
+  let encodings = [
+    InstEnc<[ENC_VOP1_CDNA3, ENC_VOP1_CDNA4], 0b00010101, (pred
+      TwoGPROrVCCOrFPConstType:$src0
+    )>,
+    InstEnc<[ENC_VOP3_CDNA3, ENC_VOP3_CDNA4], 0b0110010101, (pred
+      TwoGPROrVCCOrFPLitOf<InlineLitFP<[F64]>>:$src0
+    )>
+  ];
+}
+#endif // VCVTU32F64_DEF
+
 #ifndef VRCPIFLAGF32_DEF
 #define VRCPIFLAGF32_DEF
 def VRcpIflagF32 : VOP1Out1In1Inst<"v_rcp_iflag_f32",

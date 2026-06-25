@@ -266,6 +266,76 @@ struct ExtUIOpPattern : public OpRewritePattern<lsir::ExtUIOp> {
 };
 
 //===----------------------------------------------------------------------===//
+// ExtFOpPattern
+//===----------------------------------------------------------------------===//
+
+struct ExtFOpPattern : public OpRewritePattern<lsir::ExtFOp> {
+  using Base::Base;
+  LogicalResult matchAndRewrite(lsir::ExtFOp op,
+                                PatternRewriter &rewriter) const override;
+};
+
+//===----------------------------------------------------------------------===//
+// TruncFOpPattern
+//===----------------------------------------------------------------------===//
+
+struct TruncFOpPattern : public OpRewritePattern<lsir::TruncFOp> {
+  using Base::Base;
+  LogicalResult matchAndRewrite(lsir::TruncFOp op,
+                                PatternRewriter &rewriter) const override;
+};
+
+//===----------------------------------------------------------------------===//
+// SIToFPOpPattern
+//===----------------------------------------------------------------------===//
+
+struct SIToFPOpPattern : public OpRewritePattern<lsir::SIToFPOp> {
+  using Base::Base;
+  LogicalResult matchAndRewrite(lsir::SIToFPOp op,
+                                PatternRewriter &rewriter) const override;
+};
+
+//===----------------------------------------------------------------------===//
+// UIToFPOpPattern
+//===----------------------------------------------------------------------===//
+
+struct UIToFPOpPattern : public OpRewritePattern<lsir::UIToFPOp> {
+  using Base::Base;
+  LogicalResult matchAndRewrite(lsir::UIToFPOp op,
+                                PatternRewriter &rewriter) const override;
+};
+
+//===----------------------------------------------------------------------===//
+// FPToSIOpPattern
+//===----------------------------------------------------------------------===//
+
+struct FPToSIOpPattern : public OpRewritePattern<lsir::FPToSIOp> {
+  using Base::Base;
+  LogicalResult matchAndRewrite(lsir::FPToSIOp op,
+                                PatternRewriter &rewriter) const override;
+};
+
+//===----------------------------------------------------------------------===//
+// FPToUIOpPattern
+//===----------------------------------------------------------------------===//
+
+struct FPToUIOpPattern : public OpRewritePattern<lsir::FPToUIOp> {
+  using Base::Base;
+  LogicalResult matchAndRewrite(lsir::FPToUIOp op,
+                                PatternRewriter &rewriter) const override;
+};
+
+//===----------------------------------------------------------------------===//
+// TruncIOpPattern
+//===----------------------------------------------------------------------===//
+
+struct TruncIOpPattern : public OpRewritePattern<lsir::TruncIOp> {
+  using Base::Base;
+  LogicalResult matchAndRewrite(lsir::TruncIOp op,
+                                PatternRewriter &rewriter) const override;
+};
+
+//===----------------------------------------------------------------------===//
 // ShRSIOpPattern
 //===----------------------------------------------------------------------===//
 
@@ -731,7 +801,7 @@ LogicalResult AndIOpPattern::matchAndRewrite(lsir::AndIOp op,
 
   // Check we can transform this op
   if (failed(checkAIOp(op, rewriter, kind, lhs, rhs, oTy, width, lhsKind,
-                       rhsKind, {32, 64}, {32})))
+                       rhsKind, {32, 64}, {16, 32, 64})))
     return failure();
 
   Location loc = op.getLoc();
@@ -748,16 +818,32 @@ LogicalResult AndIOpPattern::matchAndRewrite(lsir::AndIOp op,
     return success();
   }
 
-  // Move operand to lhs if needed
+  // Move operand to lhs if needed; must happen before any split.
   if (kind == OperandKind::VGPR &&
       isOperand(rhsKind, {OperandKind::IntImm, OperandKind::SGPR})) {
     std::swap(lhs, rhs);
     std::swap(lhsKind, rhsKind);
   }
 
-  // Handle the VGPR case
-  Value result = createNewVOP<VAndB32>(rewriter, loc, dst, lhs, rhs);
-  rewriter.replaceOp(op, result);
+  // Handle the VGPR case; i16 reuses the 32-bit op (upper bits are don't-care).
+  if (width <= 32) {
+    Value result = createNewVOP<VAndB32>(rewriter, loc, dst, lhs, rhs);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+  // 64-bit VGPR: split into two 32-bit ops and recombine.
+  ValueRange dstR = splitRange(rewriter, loc, dst);
+  ValueRange lhsR = splitRange(rewriter, loc, lhs);
+  ValueRange rhsR = splitRange(rewriter, loc, rhs);
+  Value lo =
+      createNewVOP<VAndB32>(rewriter, loc, getElemOr(dstR, 0, dst),
+                            getElemOr(lhsR, 0, lhs), getElemOr(rhsR, 0, rhs));
+  Value hi =
+      createNewVOP<VAndB32>(rewriter, loc, getElemOr(dstR, 1, dst),
+                            getElemOr(lhsR, 1, lhs), getElemOr(rhsR, 1, rhs));
+  rewriter.replaceOp(op,
+                     MakeRegisterRangeOp::create(rewriter, loc, oTy, {lo, hi}));
   return success();
 }
 
@@ -1231,7 +1317,7 @@ LogicalResult OrIOpPattern::matchAndRewrite(lsir::OrIOp op,
 
   // Check we can transform this op
   if (failed(checkAIOp(op, rewriter, kind, lhs, rhs, oTy, width, lhsKind,
-                       rhsKind, {32, 64}, {32})))
+                       rhsKind, {32, 64}, {16, 32, 64})))
     return failure();
 
   Location loc = op.getLoc();
@@ -1248,9 +1334,32 @@ LogicalResult OrIOpPattern::matchAndRewrite(lsir::OrIOp op,
     return success();
   }
 
-  // Handle the VGPR case
-  Value result = createNewVOP<VOrB32>(rewriter, loc, dst, lhs, rhs);
-  rewriter.replaceOp(op, result);
+  // Move operand to lhs if needed; must happen before any split.
+  if (kind == OperandKind::VGPR &&
+      isOperand(rhsKind, {OperandKind::IntImm, OperandKind::SGPR})) {
+    std::swap(lhs, rhs);
+    std::swap(lhsKind, rhsKind);
+  }
+
+  // Handle the VGPR case; i16 reuses the 32-bit op (upper bits are don't-care).
+  if (width <= 32) {
+    Value result = createNewVOP<VOrB32>(rewriter, loc, dst, lhs, rhs);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+  // 64-bit VGPR: split into two 32-bit ops and recombine.
+  ValueRange dstR = splitRange(rewriter, loc, dst);
+  ValueRange lhsR = splitRange(rewriter, loc, lhs);
+  ValueRange rhsR = splitRange(rewriter, loc, rhs);
+  Value lo =
+      createNewVOP<VOrB32>(rewriter, loc, getElemOr(dstR, 0, dst),
+                           getElemOr(lhsR, 0, lhs), getElemOr(rhsR, 0, rhs));
+  Value hi =
+      createNewVOP<VOrB32>(rewriter, loc, getElemOr(dstR, 1, dst),
+                           getElemOr(lhsR, 1, lhs), getElemOr(rhsR, 1, rhs));
+  rewriter.replaceOp(op,
+                     MakeRegisterRangeOp::create(rewriter, loc, oTy, {lo, hi}));
   return success();
 }
 
@@ -1573,7 +1682,7 @@ LogicalResult ExtSIOpPattern::matchAndRewrite(lsir::ExtSIOp op,
 
   Location loc = op.getLoc();
   ValueRange dstR = splitRange(rewriter, loc, dst);
-  if (dstR.size() != 2)
+  if ((int)dstR.size() != 2)
     return rewriter.notifyMatchFailure(op, "dst must be a splittable range");
 
   Value dstLo = dstR[0];
@@ -1596,15 +1705,40 @@ LogicalResult ExtSIOpPattern::matchAndRewrite(lsir::ExtSIOp op,
 // ExtUIOpPattern
 //===----------------------------------------------------------------------===//
 
+/// Combine lo and hi values into a 64-bit register range.
+static Value combineLoHiToI64(PatternRewriter &rewriter, Location loc,
+                              RegisterTypeInterface oTy, Value lo, Value hi) {
+  return MakeRegisterRangeOp::create(rewriter, loc, oTy, {lo, hi});
+}
+
+/// Zero-extend a sub-32-bit integer into a 32-bit register by masking the live
+/// bits.
+static Value zeroExtendToI32(PatternRewriter &rewriter, Location loc,
+                             OperandKind kind, Value dst, Value value,
+                             int srcWidth) {
+  assert(srcWidth < 32 && "srcWidth must be < 32");
+  int32_t mask = static_cast<int32_t>((1u << srcWidth) - 1u);
+  Value maskVal = getI32Constant(rewriter, loc, mask);
+  if (kind == OperandKind::SGPR)
+    return createSOP2Out2In2<SAndB32>(rewriter, loc, dst, value, maskVal);
+  // VOP does not support non-inline literal constants; materialize the mask
+  // in a VGPR so v_and_b32 can use a register operand.
+  bool isInline = mask >= -16 && mask <= 64;
+  if (!isInline) {
+    Value maskVgpr =
+        createAllocation(rewriter, loc, getVGPR(rewriter.getContext()));
+    maskVal = VMovB32::create(rewriter, loc, maskVgpr, maskVal).getDst0Res();
+  }
+  return createNewVOP<VAndB32>(rewriter, loc, dst, value, maskVal);
+}
+
 LogicalResult ExtUIOpPattern::matchAndRewrite(lsir::ExtUIOp op,
                                               PatternRewriter &rewriter) const {
-  unsigned srcWidth = op.getSrcType().getWidth();
-  unsigned tgtWidth = op.getTgtType().getWidth();
-  if (srcWidth != 32 || tgtWidth != 64)
-    return rewriter.notifyMatchFailure(
-        op, "only i32 to i64 and u32 to u64 zero extension is supported");
+  int srcWidth = static_cast<int>(op.getSrcType().getWidth());
+  int tgtWidth = static_cast<int>(op.getTgtType().getWidth());
 
   RegisterTypeInterface oTy = op.getDst().getType();
+  int16_t rangeSize = oTy.getAsRange().size();
   Value dst = op.getDst();
   Value value = op.getValue();
   OperandKind kind = getOperandKind(oTy);
@@ -1613,26 +1747,308 @@ LogicalResult ExtUIOpPattern::matchAndRewrite(lsir::ExtUIOp op,
     return rewriter.notifyMatchFailure(op, "dst must be AMDGCN register type");
   if (kind != OperandKind::SGPR && kind != OperandKind::VGPR)
     return rewriter.notifyMatchFailure(op, "only SGPR and VGPR are supported");
-  if (oTy.getAsRange().size() != 2)
-    return rewriter.notifyMatchFailure(
-        op, "dst must be a 2-register range for i64");
 
   Location loc = op.getLoc();
-  ValueRange dstR = splitRange(rewriter, loc, dst);
-  if (dstR.size() != 2)
-    return rewriter.notifyMatchFailure(op, "dst must be a splittable range");
 
-  Value dstLo = dstR[0];
-  Value dstHi = dstR[1];
+  // narrow -> i32: mask off high bits into a single destination register.
+  if (tgtWidth == 32 && (srcWidth == 1 || srcWidth == 8 || srcWidth == 16)) {
+    if (rangeSize != 1)
+      return rewriter.notifyMatchFailure(
+          op, "dst must be a single register for i32");
+    Value result = zeroExtendToI32(rewriter, loc, kind, dst, value, srcWidth);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
 
-  // Zero extension: mov 0 -> hi, copy value -> lo
-  Value zero = getI32Constant(rewriter, loc, 0);
-  Value hi = lsir::MovOp::create(rewriter, loc, dstHi, zero).getDstRes();
-  Value lo = lsir::CopyOp::create(rewriter, loc, dstLo, value).getTargetRes();
+  // i32 -> i64: copy value into lo, zero into hi.
+  if (srcWidth == 32 && tgtWidth == 64) {
+    if (rangeSize != 2)
+      return rewriter.notifyMatchFailure(
+          op, "dst must be a 2-register range for i64");
+    ValueRange dstR = splitRange(rewriter, loc, dst);
+    if ((int)dstR.size() != 2)
+      return rewriter.notifyMatchFailure(op, "dst must be a splittable range");
+    Value hi = lsir::MovOp::create(rewriter, loc, dstR[1],
+                                   getI32Constant(rewriter, loc, 0))
+                   .getDstRes();
+    Value lo =
+        lsir::CopyOp::create(rewriter, loc, dstR[0], value).getTargetRes();
+    rewriter.replaceOp(op, combineLoHiToI64(rewriter, loc, oTy, lo, hi));
+    return success();
+  }
 
-  Value result = MakeRegisterRangeOp::create(rewriter, loc, oTy, {lo, hi});
-  rewriter.replaceOp(op, result);
-  return success();
+  // narrow -> i64: mask into lo, zero into hi.
+  if (tgtWidth == 64 && (srcWidth == 1 || srcWidth == 8 || srcWidth == 16)) {
+    if (rangeSize != 2)
+      return rewriter.notifyMatchFailure(
+          op, "dst must be a 2-register range for i64");
+    ValueRange dstR = splitRange(rewriter, loc, dst);
+    if ((int)dstR.size() != 2)
+      return rewriter.notifyMatchFailure(op, "dst must be a splittable range");
+    Value lo = zeroExtendToI32(rewriter, loc, kind, dstR[0], value, srcWidth);
+    Value hi = lsir::MovOp::create(rewriter, loc, dstR[1],
+                                   getI32Constant(rewriter, loc, 0))
+                   .getDstRes();
+    rewriter.replaceOp(op, combineLoHiToI64(rewriter, loc, oTy, lo, hi));
+    return success();
+  }
+
+  return rewriter.notifyMatchFailure(op, "unsupported extui width combination");
+}
+
+//===----------------------------------------------------------------------===//
+// TruncIOpPattern
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+TruncIOpPattern::matchAndRewrite(lsir::TruncIOp op,
+                                 PatternRewriter &rewriter) const {
+  int srcWidth = static_cast<int>(op.getSrcType().getWidth());
+  int tgtWidth = static_cast<int>(op.getTgtType().getWidth());
+  RegisterTypeInterface oTy = op.getDst().getType();
+  Value dst = op.getDst();
+  Value value = op.getValue();
+  OperandKind kind = getOperandKind(oTy);
+  Location loc = op.getLoc();
+
+  if (!isAMDReg(oTy))
+    return rewriter.notifyMatchFailure(op,
+                                       "dst must be an AMDGCN register type");
+  if (kind != OperandKind::SGPR && kind != OperandKind::VGPR)
+    return rewriter.notifyMatchFailure(op, "only SGPR and VGPR are supported");
+
+  // i64 -> i32: result is the low register of the source pair.
+  if (srcWidth == 64 && tgtWidth == 32) {
+    ValueRange valR = splitRange(rewriter, loc, value);
+    if ((int)valR.size() != 2)
+      return rewriter.notifyMatchFailure(
+          op, "source must be a 2-register range for i64");
+    Value result =
+        lsir::CopyOp::create(rewriter, loc, dst, valR[0]).getTargetRes();
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+  // i32 -> i16: low 16 bits live in the low half; a plain copy suffices.
+  if (srcWidth == 32 && tgtWidth == 16) {
+    Value result =
+        lsir::CopyOp::create(rewriter, loc, dst, value).getTargetRes();
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+  // i32 -> i8 / i32 -> i1: mask off the high bits (helper handles SGPR/VGPR
+  // dispatch and non-inline mask materialization).
+  if (srcWidth == 32 && (tgtWidth == 8 || tgtWidth == 1)) {
+    Value result = zeroExtendToI32(rewriter, loc, kind, dst, value, tgtWidth);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+  return rewriter.notifyMatchFailure(op,
+                                     "unsupported trunci width combination");
+}
+
+//===----------------------------------------------------------------------===//
+// ExtFOpPattern
+//===----------------------------------------------------------------------===//
+
+LogicalResult ExtFOpPattern::matchAndRewrite(lsir::ExtFOp op,
+                                             PatternRewriter &rewriter) const {
+  int srcWidth = static_cast<int>(op.getSrcType().getWidth());
+  int tgtWidth = static_cast<int>(op.getTgtType().getWidth());
+  Value dst = op.getDst();
+  Value value = op.getValue();
+  Location loc = op.getLoc();
+
+  if (getOperandKind(dst.getType()) != OperandKind::VGPR)
+    return rewriter.notifyMatchFailure(op, "extf dst must be a VGPR");
+
+  if (srcWidth == 16 && tgtWidth == 32) {
+    if (cast<RegisterTypeInterface>(dst.getType()).getAsRange().size() != 1)
+      return rewriter.notifyMatchFailure(op,
+                                         "f32 dst must be a single register");
+    Value result = VCvtF32F16::create(rewriter, loc, dst, value).getDst0Res();
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+  if (srcWidth == 32 && tgtWidth == 64) {
+    if (cast<RegisterTypeInterface>(dst.getType()).getAsRange().size() != 2)
+      return rewriter.notifyMatchFailure(op,
+                                         "f64 dst must be a 2-register range");
+    Value result = VCvtF64F32::create(rewriter, loc, dst, value).getDst0Res();
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+  return rewriter.notifyMatchFailure(op, "unsupported extf width combination");
+}
+
+//===----------------------------------------------------------------------===//
+// TruncFOpPattern
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+TruncFOpPattern::matchAndRewrite(lsir::TruncFOp op,
+                                 PatternRewriter &rewriter) const {
+  int srcWidth = static_cast<int>(op.getSrcType().getWidth());
+  int tgtWidth = static_cast<int>(op.getTgtType().getWidth());
+  Value dst = op.getDst();
+  Value value = op.getValue();
+  Location loc = op.getLoc();
+
+  if (getOperandKind(dst.getType()) != OperandKind::VGPR)
+    return rewriter.notifyMatchFailure(op, "truncf dst must be a VGPR");
+
+  if (srcWidth == 32 && tgtWidth == 16) {
+    if (cast<RegisterTypeInterface>(dst.getType()).getAsRange().size() != 1)
+      return rewriter.notifyMatchFailure(op,
+                                         "f16 dst must be a single register");
+    Value result = VCvtF16F32::create(rewriter, loc, dst, value).getDst0Res();
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+  if (srcWidth == 64 && tgtWidth == 32) {
+    if (cast<RegisterTypeInterface>(value.getType()).getAsRange().size() != 2)
+      return rewriter.notifyMatchFailure(op,
+                                         "f64 src must be a 2-register range");
+    Value result = VCvtF32F64::create(rewriter, loc, dst, value).getDst0Res();
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+  return rewriter.notifyMatchFailure(op,
+                                     "unsupported truncf width combination");
+}
+
+//===----------------------------------------------------------------------===//
+// SIToFPOpPattern
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+SIToFPOpPattern::matchAndRewrite(lsir::SIToFPOp op,
+                                 PatternRewriter &rewriter) const {
+  int srcWidth = static_cast<int>(op.getSrcType().getWidth());
+  int tgtWidth = static_cast<int>(op.getTgtType().getWidth());
+  Value dst = op.getDst();
+  Value value = op.getValue();
+  Location loc = op.getLoc();
+
+  if (getOperandKind(dst.getType()) != OperandKind::VGPR)
+    return rewriter.notifyMatchFailure(op, "sitofp dst must be a VGPR");
+
+  if (srcWidth == 32 && tgtWidth == 32) {
+    Value result = VCvtF32I32::create(rewriter, loc, dst, value).getDst0Res();
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+  if (srcWidth == 32 && tgtWidth == 64) {
+    if (cast<RegisterTypeInterface>(dst.getType()).getAsRange().size() != 2)
+      return rewriter.notifyMatchFailure(op,
+                                         "f64 dst must be a 2-register range");
+    Value result = VCvtF64I32::create(rewriter, loc, dst, value).getDst0Res();
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+  return rewriter.notifyMatchFailure(op,
+                                     "unsupported sitofp width combination");
+}
+
+//===----------------------------------------------------------------------===//
+// UIToFPOpPattern
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+UIToFPOpPattern::matchAndRewrite(lsir::UIToFPOp op,
+                                 PatternRewriter &rewriter) const {
+  int srcWidth = static_cast<int>(op.getSrcType().getWidth());
+  int tgtWidth = static_cast<int>(op.getTgtType().getWidth());
+  Value dst = op.getDst();
+  Value value = op.getValue();
+  Location loc = op.getLoc();
+
+  if (getOperandKind(dst.getType()) != OperandKind::VGPR)
+    return rewriter.notifyMatchFailure(op, "uitofp dst must be a VGPR");
+
+  if (srcWidth == 32 && tgtWidth == 32) {
+    Value result = VCvtF32U32::create(rewriter, loc, dst, value).getDst0Res();
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+  if (srcWidth == 32 && tgtWidth == 64) {
+    if (cast<RegisterTypeInterface>(dst.getType()).getAsRange().size() != 2)
+      return rewriter.notifyMatchFailure(op,
+                                         "f64 dst must be a 2-register range");
+    Value result = VCvtF64U32::create(rewriter, loc, dst, value).getDst0Res();
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+  return rewriter.notifyMatchFailure(op,
+                                     "unsupported uitofp width combination");
+}
+
+//===----------------------------------------------------------------------===//
+// FPToSIOpPattern
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+FPToSIOpPattern::matchAndRewrite(lsir::FPToSIOp op,
+                                 PatternRewriter &rewriter) const {
+  int srcWidth = static_cast<int>(op.getSrcType().getWidth());
+  int tgtWidth = static_cast<int>(op.getTgtType().getWidth());
+  Value dst = op.getDst();
+  Value value = op.getValue();
+  Location loc = op.getLoc();
+
+  if (getOperandKind(dst.getType()) != OperandKind::VGPR)
+    return rewriter.notifyMatchFailure(op, "fptosi dst must be a VGPR");
+
+  if (srcWidth == 32 && tgtWidth == 32) {
+    Value result = VCvtI32F32::create(rewriter, loc, dst, value).getDst0Res();
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+  if (srcWidth == 64 && tgtWidth == 32) {
+    if (cast<RegisterTypeInterface>(value.getType()).getAsRange().size() != 2)
+      return rewriter.notifyMatchFailure(op,
+                                         "f64 src must be a 2-register range");
+    Value result = VCvtI32F64::create(rewriter, loc, dst, value).getDst0Res();
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+  return rewriter.notifyMatchFailure(op,
+                                     "unsupported fptosi width combination");
+}
+
+//===----------------------------------------------------------------------===//
+// FPToUIOpPattern
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+FPToUIOpPattern::matchAndRewrite(lsir::FPToUIOp op,
+                                 PatternRewriter &rewriter) const {
+  int srcWidth = static_cast<int>(op.getSrcType().getWidth());
+  int tgtWidth = static_cast<int>(op.getTgtType().getWidth());
+  Value dst = op.getDst();
+  Value value = op.getValue();
+  Location loc = op.getLoc();
+
+  if (getOperandKind(dst.getType()) != OperandKind::VGPR)
+    return rewriter.notifyMatchFailure(op, "fptoui dst must be a VGPR");
+
+  if (srcWidth == 32 && tgtWidth == 32) {
+    Value result = VCvtU32F32::create(rewriter, loc, dst, value).getDst0Res();
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+  if (srcWidth == 64 && tgtWidth == 32) {
+    if (cast<RegisterTypeInterface>(value.getType()).getAsRange().size() != 2)
+      return rewriter.notifyMatchFailure(op,
+                                         "f64 src must be a 2-register range");
+    Value result = VCvtU32F64::create(rewriter, loc, dst, value).getDst0Res();
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+  return rewriter.notifyMatchFailure(op,
+                                     "unsupported fptoui width combination");
 }
 
 //===----------------------------------------------------------------------===//
@@ -2020,6 +2436,62 @@ PtrAddOpPattern::matchAndRewrite(PtrAddOp op, PatternRewriter &rewriter) const {
   return success();
 }
 
+/// Emit a scalar select instruction; returns null Value for unsupported sizes.
+static Value emitScalarSelect(PatternRewriter &rewriter, Location loc,
+                              int16_t rangeSize, Value dst, Value trueVal,
+                              Value falseVal, Value flagReg) {
+  if (rangeSize == 1)
+    return SCselectB32::create(rewriter, loc, dst, trueVal, falseVal, flagReg)
+        .getDst0Res();
+  if (rangeSize == 2)
+    return SCselectB64::create(rewriter, loc, dst, trueVal, falseVal, flagReg)
+        .getDst0Res();
+  return Value();
+}
+
+/// Emit a vector select instruction; returns null Value for unsupported sizes.
+static Value emitVectorSelect(PatternRewriter &rewriter, Location loc,
+                              int16_t rangeSize, Value dst, Value trueVal,
+                              Value falseVal, Value vccMask) {
+  if (rangeSize == 1) {
+    // VOP2 src1 must be a VGPR; materialize via v_mov_b32 into dst if needed.
+    // The resulting dst WAR in v_cndmask_b32 is well-defined for VOP2.
+    if (!isa<VGPRType>(trueVal.getType())) {
+      VMovB32::create(rewriter, loc, dst, trueVal);
+      trueVal = dst;
+    }
+    return VCndmaskB32::create(rewriter, loc, dst, falseVal, trueVal, vccMask)
+        .getDst0Res();
+  }
+  if (rangeSize == 2) {
+    RegisterTypeInterface oTy = cast<RegisterTypeInterface>(dst.getType());
+    ValueRange dstR = splitRange(rewriter, loc, dst);
+    ValueRange trueR = splitRange(rewriter, loc, trueVal);
+    ValueRange falseR = splitRange(rewriter, loc, falseVal);
+    Value dst0 = getElemOr(dstR, 0, dst);
+    Value true0 = getElemOr(trueR, 0, trueVal);
+    Value false0 = getElemOr(falseR, 0, falseVal);
+    Value dst1 = getElemOr(dstR, 1, dst);
+    Value true1 = getElemOr(trueR, 1, trueVal);
+    Value false1 = getElemOr(falseR, 1, falseVal);
+    // Materialize non-VGPR true halves before v_cndmask_b32.
+    if (!isa<VGPRType>(true0.getType())) {
+      VMovB32::create(rewriter, loc, dst0, true0);
+      true0 = dst0;
+    }
+    if (!isa<VGPRType>(true1.getType())) {
+      VMovB32::create(rewriter, loc, dst1, true1);
+      true1 = dst1;
+    }
+    Value lo = VCndmaskB32::create(rewriter, loc, dst0, false0, true0, vccMask)
+                   .getDst0Res();
+    Value hi = VCndmaskB32::create(rewriter, loc, dst1, false1, true1, vccMask)
+                   .getDst0Res();
+    return MakeRegisterRangeOp::create(rewriter, loc, oTy, {lo, hi});
+  }
+  return Value();
+}
+
 /// Broadcast SCC (or other non-lane-mask flag) to a full lane mask.
 static Value broadcastFlagToLaneMask(PatternRewriter &rewriter, Location loc,
                                      Operation *anchor, Value flagReg) {
@@ -2061,13 +2533,15 @@ SelectOpPattern::matchAndRewrite(lsir::SelectOp op,
   bool resultIsVector = isVGPR(dst.getType(), /*numWords=*/-1) ||
                         isVGPR(trueVal.getType(), /*numWords=*/-1) ||
                         isVGPR(falseVal.getType(), /*numWords=*/-1);
+  int16_t rangeSize =
+      cast<RegisterTypeInterface>(dst.getType()).getAsRange().size();
 
   if (!resultIsVector) {
-    // s_cselect_b32: sdst = SCC ? src0 : src1.
-    // src0 = true_value (selected when SCC=1), src1 = false_value.
-    Value result =
-        SCselectB32::create(rewriter, loc, dst, trueVal, falseVal, flagReg)
-            .getDst0Res();
+    // s_cselect_b32/b64: sdst = SCC ? src0 : src1.
+    Value result = emitScalarSelect(rewriter, loc, rangeSize, dst, trueVal,
+                                    falseVal, flagReg);
+    if (!result)
+      return rewriter.notifyMatchFailure(op, "unsupported scalar select width");
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -2077,15 +2551,10 @@ SelectOpPattern::matchAndRewrite(lsir::SelectOp op,
   Value vccMask = isLaneMask(flagReg.getType())
                       ? flagReg
                       : broadcastFlagToLaneMask(rewriter, loc, op, flagReg);
-  // VOP2 src1 must be a VGPR; materialize via v_mov_b32 into dst if needed.
-  // The resulting dst WAR in v_cndmask_b32 is well-defined for VOP2.
-  if (!isa<VGPRType>(trueVal.getType())) {
-    VMovB32::create(rewriter, loc, dst, trueVal);
-    trueVal = dst;
-  }
-  Value result =
-      VCndmaskB32::create(rewriter, loc, dst, falseVal, trueVal, vccMask)
-          .getDst0Res();
+  Value result = emitVectorSelect(rewriter, loc, rangeSize, dst, trueVal,
+                                  falseVal, vccMask);
+  if (!result)
+    return rewriter.notifyMatchFailure(op, "unsupported vector select width");
   rewriter.replaceOp(op, result);
   return success();
 }
@@ -2455,11 +2924,13 @@ void mlir::aster::amdgcn::populateToAMDGCNPatterns(
     RewritePatternSet &patterns) {
   patterns.add< // Arithmetic ops.
       AddFOpPattern, AddIOpPattern, AndIOpPattern, CmpIOpPattern,
-      SelectOpPattern, ExtSIOpPattern, ExtUIOpPattern, MaximumFOpPattern,
-      MinimumFOpPattern, MulFOpPattern, MulIOpPattern, MulHiSIOpPattern,
-      OrIOpPattern, ShLIOpPattern, ShRSIOpPattern, ShRUIOpPattern,
-      SubFOpPattern, SubIOpPattern, XOrIOpPattern,
-      DivUIOpPattern, RemUIOpPattern, DivSIOpPattern, RemSIOpPattern,
+      SelectOpPattern, ExtFOpPattern, ExtSIOpPattern, ExtUIOpPattern,
+      TruncFOpPattern, SIToFPOpPattern, UIToFPOpPattern, FPToSIOpPattern,
+      FPToUIOpPattern, MaximumFOpPattern, MinimumFOpPattern, MulFOpPattern,
+      MulIOpPattern, MulHiSIOpPattern, OrIOpPattern, ShLIOpPattern,
+      ShRSIOpPattern, ShRUIOpPattern, SubFOpPattern, SubIOpPattern,
+      TruncIOpPattern, XOrIOpPattern, DivUIOpPattern, RemUIOpPattern,
+      DivSIOpPattern, RemSIOpPattern,
       // Memory ops.
       AllocaOpPattern, AssumeNoaliasOpPattern, LoadOpPattern, StoreOpPattern,
       // Data movement ops.

@@ -384,6 +384,81 @@ func.func @test_or_i64_sgpr(%dst: !amdgcn.sgpr<[? + 2]>, %lhs: !amdgcn.sgpr<[? +
   return %res : !amdgcn.sgpr<[? + 2]>
 }
 
+// CHECK-LABEL:   func.func @test_and_i16_vgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.vgpr, %[[ARG1:.*]]: !amdgcn.vgpr, %[[ARG2:.*]]: !amdgcn.vgpr) -> !amdgcn.vgpr {
+// CHECK:           %[[VAL_0:.*]] = amdgcn.v_and_b32 outs(%[[ARG0]]) ins(%[[ARG1]], %[[ARG2]]) : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr)
+// CHECK:           return %[[VAL_0]] : !amdgcn.vgpr
+// CHECK:         }
+func.func @test_and_i16_vgpr(%dst: !amdgcn.vgpr, %lhs: !amdgcn.vgpr, %rhs: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %res = lsir.andi i16 %dst, %lhs, %rhs : !amdgcn.vgpr, !amdgcn.vgpr, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr
+}
+
+// CHECK-LABEL:   func.func @test_and_i64_vgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.vgpr<[? + 2]>, %[[ARG1:.*]]: !amdgcn.vgpr<[? + 2]>, %[[ARG2:.*]]: !amdgcn.vgpr<[? + 2]>) -> !amdgcn.vgpr<[? + 2]> {
+// CHECK:           %[[VAL_0:.*]]:2 = amdgcn.split_register_range %[[ARG0]] : !amdgcn.vgpr<[? + 2]>
+// CHECK:           %[[VAL_1:.*]]:2 = amdgcn.split_register_range %[[ARG1]] : !amdgcn.vgpr<[? + 2]>
+// CHECK:           %[[VAL_2:.*]]:2 = amdgcn.split_register_range %[[ARG2]] : !amdgcn.vgpr<[? + 2]>
+// CHECK:           %[[VAL_3:.*]] = amdgcn.v_and_b32 outs(%[[VAL_0]]#0) ins(%[[VAL_1]]#0, %[[VAL_2]]#0) : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr)
+// CHECK:           %[[VAL_4:.*]] = amdgcn.v_and_b32 outs(%[[VAL_0]]#1) ins(%[[VAL_1]]#1, %[[VAL_2]]#1) : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr)
+// CHECK:           %[[VAL_5:.*]] = amdgcn.make_register_range %[[VAL_3]], %[[VAL_4]] : !amdgcn.vgpr, !amdgcn.vgpr
+// CHECK:           return %[[VAL_5]] : !amdgcn.vgpr<[? + 2]>
+// CHECK:         }
+func.func @test_and_i64_vgpr(%dst: !amdgcn.vgpr<[? + 2]>, %lhs: !amdgcn.vgpr<[? + 2]>, %rhs: !amdgcn.vgpr<[? + 2]>) -> !amdgcn.vgpr<[? + 2]> {
+  %res = lsir.andi i64 %dst, %lhs, %rhs : !amdgcn.vgpr<[? + 2]>, !amdgcn.vgpr<[? + 2]>, !amdgcn.vgpr<[? + 2]>
+  return %res : !amdgcn.vgpr<[? + 2]>
+}
+
+// CHECK-LABEL:   func.func @test_select_i64_sgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.sgpr<[? + 2]>, %[[ARG1:.*]]: !amdgcn.scc, %[[ARG2:.*]]: !amdgcn.sgpr<[? + 2]>, %[[ARG3:.*]]: !amdgcn.sgpr<[? + 2]>) -> !amdgcn.sgpr<[? + 2]> {
+// CHECK:           %[[VAL_0:.*]] = amdgcn.s_cselect_b64 outs(%[[ARG0]]) ins(%[[ARG2]], %[[ARG3]], %[[ARG1]]) : outs(!amdgcn.sgpr<[? + 2]>) ins(!amdgcn.sgpr<[? + 2]>, !amdgcn.sgpr<[? + 2]>, !amdgcn.scc)
+// CHECK:           return %[[VAL_0]] : !amdgcn.sgpr<[? + 2]>
+// CHECK:         }
+func.func @test_select_i64_sgpr(%dst: !amdgcn.sgpr<[? + 2]>, %cond: !amdgcn.scc, %tv: !amdgcn.sgpr<[? + 2]>, %fv: !amdgcn.sgpr<[? + 2]>) -> !amdgcn.sgpr<[? + 2]> {
+  %res = lsir.select %dst, %cond, %tv, %fv : !amdgcn.sgpr<[? + 2]>, !amdgcn.scc, !amdgcn.sgpr<[? + 2]>, !amdgcn.sgpr<[? + 2]>
+  return %res : !amdgcn.sgpr<[? + 2]>
+}
+
+// CHECK-LABEL:   func.func @test_select_i64_vgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.vgpr<[? + 2]>, %[[ARG1:.*]]: !amdgcn.vcc, %[[ARG2:.*]]: !amdgcn.vgpr<[? + 2]>, %[[ARG3:.*]]: !amdgcn.vgpr<[? + 2]>) -> !amdgcn.vgpr<[? + 2]> {
+// CHECK:           %[[VAL_0:.*]]:2 = amdgcn.split_register_range %[[ARG0]] : !amdgcn.vgpr<[? + 2]>
+// CHECK:           %[[VAL_1:.*]]:2 = amdgcn.split_register_range %[[ARG2]] : !amdgcn.vgpr<[? + 2]>
+// CHECK:           %[[VAL_2:.*]]:2 = amdgcn.split_register_range %[[ARG3]] : !amdgcn.vgpr<[? + 2]>
+// CHECK:           %[[VAL_3:.*]] = amdgcn.v_cndmask_b32 outs(%[[VAL_0]]#0) ins(%[[VAL_2]]#0, %[[VAL_1]]#0, %[[ARG1]]) : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr, !amdgcn.vcc)
+// CHECK:           %[[VAL_4:.*]] = amdgcn.v_cndmask_b32 outs(%[[VAL_0]]#1) ins(%[[VAL_2]]#1, %[[VAL_1]]#1, %[[ARG1]]) : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr, !amdgcn.vcc)
+// CHECK:           %[[VAL_5:.*]] = amdgcn.make_register_range %[[VAL_3]], %[[VAL_4]] : !amdgcn.vgpr, !amdgcn.vgpr
+// CHECK:           return %[[VAL_5]] : !amdgcn.vgpr<[? + 2]>
+// CHECK:         }
+func.func @test_select_i64_vgpr(%dst: !amdgcn.vgpr<[? + 2]>, %cond: !amdgcn.vcc, %tv: !amdgcn.vgpr<[? + 2]>, %fv: !amdgcn.vgpr<[? + 2]>) -> !amdgcn.vgpr<[? + 2]> {
+  %res = lsir.select %dst, %cond, %tv, %fv : !amdgcn.vgpr<[? + 2]>, !amdgcn.vcc, !amdgcn.vgpr<[? + 2]>, !amdgcn.vgpr<[? + 2]>
+  return %res : !amdgcn.vgpr<[? + 2]>
+}
+
+// CHECK-LABEL:   func.func @test_or_i16_vgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.vgpr, %[[ARG1:.*]]: !amdgcn.vgpr, %[[ARG2:.*]]: !amdgcn.vgpr) -> !amdgcn.vgpr {
+// CHECK:           %[[VAL_0:.*]] = amdgcn.v_or_b32 outs(%[[ARG0]]) ins(%[[ARG1]], %[[ARG2]]) : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr)
+// CHECK:           return %[[VAL_0]] : !amdgcn.vgpr
+// CHECK:         }
+func.func @test_or_i16_vgpr(%dst: !amdgcn.vgpr, %lhs: !amdgcn.vgpr, %rhs: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %res = lsir.ori i16 %dst, %lhs, %rhs : !amdgcn.vgpr, !amdgcn.vgpr, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr
+}
+
+// CHECK-LABEL:   func.func @test_or_i64_vgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.vgpr<[? + 2]>, %[[ARG1:.*]]: !amdgcn.vgpr<[? + 2]>, %[[ARG2:.*]]: !amdgcn.vgpr<[? + 2]>) -> !amdgcn.vgpr<[? + 2]> {
+// CHECK:           %[[VAL_0:.*]]:2 = amdgcn.split_register_range %[[ARG0]] : !amdgcn.vgpr<[? + 2]>
+// CHECK:           %[[VAL_1:.*]]:2 = amdgcn.split_register_range %[[ARG1]] : !amdgcn.vgpr<[? + 2]>
+// CHECK:           %[[VAL_2:.*]]:2 = amdgcn.split_register_range %[[ARG2]] : !amdgcn.vgpr<[? + 2]>
+// CHECK:           %[[VAL_3:.*]] = amdgcn.v_or_b32 outs(%[[VAL_0]]#0) ins(%[[VAL_1]]#0, %[[VAL_2]]#0) : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr)
+// CHECK:           %[[VAL_4:.*]] = amdgcn.v_or_b32 outs(%[[VAL_0]]#1) ins(%[[VAL_1]]#1, %[[VAL_2]]#1) : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr)
+// CHECK:           %[[VAL_5:.*]] = amdgcn.make_register_range %[[VAL_3]], %[[VAL_4]] : !amdgcn.vgpr, !amdgcn.vgpr
+// CHECK:           return %[[VAL_5]] : !amdgcn.vgpr<[? + 2]>
+// CHECK:         }
+func.func @test_or_i64_vgpr(%dst: !amdgcn.vgpr<[? + 2]>, %lhs: !amdgcn.vgpr<[? + 2]>, %rhs: !amdgcn.vgpr<[? + 2]>) -> !amdgcn.vgpr<[? + 2]> {
+  %res = lsir.ori i64 %dst, %lhs, %rhs : !amdgcn.vgpr<[? + 2]>, !amdgcn.vgpr<[? + 2]>, !amdgcn.vgpr<[? + 2]>
+  return %res : !amdgcn.vgpr<[? + 2]>
+}
+
 // CHECK-LABEL:   func.func @test_xor_i32_vgpr(
 // CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.vgpr, %[[ARG1:.*]]: !amdgcn.vgpr, %[[ARG2:.*]]: !amdgcn.vgpr) -> !amdgcn.vgpr {
 // CHECK:           %[[VAL_0:.*]] = amdgcn.v_xor_b32 outs(%[[ARG0]]) ins(%[[ARG1]], %[[ARG2]]) : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr)
@@ -926,6 +1001,288 @@ func.func @test_extui_i32_to_i64_sgpr(%dst: !amdgcn.sgpr<[? + 2]>, %value: !amdg
 func.func @test_extui_i32_to_i64_vgpr(%dst: !amdgcn.vgpr<[? + 2]>, %value: !amdgcn.vgpr) -> !amdgcn.vgpr<[? + 2]> {
   %res = lsir.extui i64 from i32 %dst, %value : !amdgcn.vgpr<[? + 2]>, !amdgcn.vgpr
   return %res : !amdgcn.vgpr<[? + 2]>
+}
+
+// Test ExtUIOp (zero extension i16->i32) - SGPR
+// CHECK-LABEL:   func.func @test_extui_i16_to_i32_sgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.sgpr,
+// CHECK-SAME:      %[[ARG1:.*]]: !amdgcn.sgpr) -> !amdgcn.sgpr {
+// CHECK:           %[[CONSTANT_0:.*]] = arith.constant 65535 : i32
+// CHECK:           %[[SCC_ALLOCA_0:.*]] = amdgcn.alloca : !amdgcn.scc<0>
+// CHECK:           %[[VAL_0:.*]] = amdgcn.s_and_b32 outs(%[[ARG0]], %[[SCC_ALLOCA_0]]) ins(%[[ARG1]], %[[CONSTANT_0]]) : outs(!amdgcn.sgpr, !amdgcn.scc<0>) ins(!amdgcn.sgpr, i32)
+// CHECK:           return %[[VAL_0]] : !amdgcn.sgpr
+// CHECK:         }
+func.func @test_extui_i16_to_i32_sgpr(%dst: !amdgcn.sgpr, %value: !amdgcn.sgpr) -> !amdgcn.sgpr {
+  %res = lsir.extui i32 from i16 %dst, %value : !amdgcn.sgpr, !amdgcn.sgpr
+  return %res : !amdgcn.sgpr
+}
+
+// Test ExtUIOp (zero extension i16->i32) - VGPR
+// CHECK-LABEL:   func.func @test_extui_i16_to_i32_vgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.vgpr,
+// CHECK-SAME:      %[[ARG1:.*]]: !amdgcn.vgpr) -> !amdgcn.vgpr {
+// CHECK:           %[[CONSTANT_0:.*]] = arith.constant 65535 : i32
+// CHECK:           %[[TMP:.*]] = amdgcn.alloca : !amdgcn.vgpr
+// CHECK:           %[[MASK:.*]] = amdgcn.v_mov_b32 outs(%[[TMP]]) ins(%[[CONSTANT_0]]) : outs(!amdgcn.vgpr) ins(i32)
+// CHECK:           %[[VAL_0:.*]] = amdgcn.v_and_b32 outs(%[[ARG0]]) ins(%[[ARG1]], %[[MASK]]) : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr)
+// CHECK:           return %[[VAL_0]] : !amdgcn.vgpr
+// CHECK:         }
+func.func @test_extui_i16_to_i32_vgpr(%dst: !amdgcn.vgpr, %value: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %res = lsir.extui i32 from i16 %dst, %value : !amdgcn.vgpr, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr
+}
+
+// Test ExtUIOp (zero extension i8->i32) - VGPR
+// CHECK-LABEL:   func.func @test_extui_i8_to_i32_vgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.vgpr,
+// CHECK-SAME:      %[[ARG1:.*]]: !amdgcn.vgpr) -> !amdgcn.vgpr {
+// CHECK:           %[[CONSTANT_0:.*]] = arith.constant 255 : i32
+// CHECK:           %[[TMP:.*]] = amdgcn.alloca : !amdgcn.vgpr
+// CHECK:           %[[MASK:.*]] = amdgcn.v_mov_b32 outs(%[[TMP]]) ins(%[[CONSTANT_0]]) : outs(!amdgcn.vgpr) ins(i32)
+// CHECK:           %[[VAL_0:.*]] = amdgcn.v_and_b32 outs(%[[ARG0]]) ins(%[[ARG1]], %[[MASK]]) : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr)
+// CHECK:           return %[[VAL_0]] : !amdgcn.vgpr
+// CHECK:         }
+func.func @test_extui_i8_to_i32_vgpr(%dst: !amdgcn.vgpr, %value: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %res = lsir.extui i32 from i8 %dst, %value : !amdgcn.vgpr, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr
+}
+
+// Test ExtUIOp (zero extension i1->i32) - VGPR
+// CHECK-LABEL:   func.func @test_extui_i1_to_i32_vgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.vgpr,
+// CHECK-SAME:      %[[ARG1:.*]]: !amdgcn.vgpr) -> !amdgcn.vgpr {
+// CHECK:           %[[CONSTANT_0:.*]] = arith.constant 1 : i32
+// CHECK:           %[[VAL_0:.*]] = amdgcn.v_and_b32 outs(%[[ARG0]]) ins(%[[ARG1]], %[[CONSTANT_0]]) : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, i32)
+// CHECK:           return %[[VAL_0]] : !amdgcn.vgpr
+// CHECK:         }
+func.func @test_extui_i1_to_i32_vgpr(%dst: !amdgcn.vgpr, %value: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %res = lsir.extui i32 from i1 %dst, %value : !amdgcn.vgpr, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr
+}
+
+// Test ExtUIOp (zero extension i8->i32) - SGPR
+// CHECK-LABEL:   func.func @test_extui_i8_to_i32_sgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.sgpr,
+// CHECK-SAME:      %[[ARG1:.*]]: !amdgcn.sgpr) -> !amdgcn.sgpr {
+// CHECK:           %[[CONSTANT_0:.*]] = arith.constant 255 : i32
+// CHECK:           %[[SCC_ALLOCA_0:.*]] = amdgcn.alloca : !amdgcn.scc<0>
+// CHECK:           %[[VAL_0:.*]] = amdgcn.s_and_b32 outs(%[[ARG0]], %[[SCC_ALLOCA_0]]) ins(%[[ARG1]], %[[CONSTANT_0]]) : outs(!amdgcn.sgpr, !amdgcn.scc<0>) ins(!amdgcn.sgpr, i32)
+// CHECK:           return %[[VAL_0]] : !amdgcn.sgpr
+// CHECK:         }
+func.func @test_extui_i8_to_i32_sgpr(%dst: !amdgcn.sgpr, %value: !amdgcn.sgpr) -> !amdgcn.sgpr {
+  %res = lsir.extui i32 from i8 %dst, %value : !amdgcn.sgpr, !amdgcn.sgpr
+  return %res : !amdgcn.sgpr
+}
+
+// Test ExtUIOp (zero extension i1->i32) - SGPR
+// CHECK-LABEL:   func.func @test_extui_i1_to_i32_sgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.sgpr,
+// CHECK-SAME:      %[[ARG1:.*]]: !amdgcn.sgpr) -> !amdgcn.sgpr {
+// CHECK:           %[[CONSTANT_0:.*]] = arith.constant 1 : i32
+// CHECK:           %[[SCC_ALLOCA_0:.*]] = amdgcn.alloca : !amdgcn.scc<0>
+// CHECK:           %[[VAL_0:.*]] = amdgcn.s_and_b32 outs(%[[ARG0]], %[[SCC_ALLOCA_0]]) ins(%[[ARG1]], %[[CONSTANT_0]]) : outs(!amdgcn.sgpr, !amdgcn.scc<0>) ins(!amdgcn.sgpr, i32)
+// CHECK:           return %[[VAL_0]] : !amdgcn.sgpr
+// CHECK:         }
+func.func @test_extui_i1_to_i32_sgpr(%dst: !amdgcn.sgpr, %value: !amdgcn.sgpr) -> !amdgcn.sgpr {
+  %res = lsir.extui i32 from i1 %dst, %value : !amdgcn.sgpr, !amdgcn.sgpr
+  return %res : !amdgcn.sgpr
+}
+
+// Test ExtUIOp (zero extension i16->i64) - VGPR
+// CHECK-LABEL:   func.func @test_extui_i16_to_i64_vgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.vgpr<[? + 2]>,
+// CHECK-SAME:      %[[ARG1:.*]]: !amdgcn.vgpr) -> !amdgcn.vgpr<[? + 2]> {
+// CHECK:           %[[CONSTANT_0:.*]] = arith.constant 0 : i32
+// CHECK:           %[[CONSTANT_1:.*]] = arith.constant 65535 : i32
+// CHECK:           %[[SPLIT_REGISTER_RANGE_0:.*]]:2 = amdgcn.split_register_range %[[ARG0]] : !amdgcn.vgpr<[? + 2]>
+// CHECK:           %[[TMP:.*]] = amdgcn.alloca : !amdgcn.vgpr
+// CHECK:           %[[MASK:.*]] = amdgcn.v_mov_b32 outs(%[[TMP]]) ins(%[[CONSTANT_1]]) : outs(!amdgcn.vgpr) ins(i32)
+// CHECK:           %[[VAL_0:.*]] = amdgcn.v_and_b32 outs(%[[SPLIT_REGISTER_RANGE_0]]#0) ins(%[[ARG1]], %[[MASK]]) : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr)
+// CHECK:           %[[VAL_1:.*]] = amdgcn.v_mov_b32 outs(%[[SPLIT_REGISTER_RANGE_0]]#1) ins(%[[CONSTANT_0]]) : outs(!amdgcn.vgpr) ins(i32)
+// CHECK:           %[[MAKE_REGISTER_RANGE_0:.*]] = amdgcn.make_register_range %[[VAL_0]], %[[VAL_1]] : !amdgcn.vgpr, !amdgcn.vgpr
+// CHECK:           return %[[MAKE_REGISTER_RANGE_0]] : !amdgcn.vgpr<[? + 2]>
+// CHECK:         }
+func.func @test_extui_i16_to_i64_vgpr(%dst: !amdgcn.vgpr<[? + 2]>, %value: !amdgcn.vgpr) -> !amdgcn.vgpr<[? + 2]> {
+  %res = lsir.extui i64 from i16 %dst, %value : !amdgcn.vgpr<[? + 2]>, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr<[? + 2]>
+}
+
+// Test ExtUIOp (zero extension i8->i64) - VGPR
+// CHECK-LABEL:   func.func @test_extui_i8_to_i64_vgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.vgpr<[? + 2]>,
+// CHECK-SAME:      %[[ARG1:.*]]: !amdgcn.vgpr) -> !amdgcn.vgpr<[? + 2]> {
+// CHECK:           %[[CONSTANT_0:.*]] = arith.constant 0 : i32
+// CHECK:           %[[CONSTANT_1:.*]] = arith.constant 255 : i32
+// CHECK:           %[[SPLIT_REGISTER_RANGE_0:.*]]:2 = amdgcn.split_register_range %[[ARG0]] : !amdgcn.vgpr<[? + 2]>
+// CHECK:           %[[TMP:.*]] = amdgcn.alloca : !amdgcn.vgpr
+// CHECK:           %[[MASK:.*]] = amdgcn.v_mov_b32 outs(%[[TMP]]) ins(%[[CONSTANT_1]]) : outs(!amdgcn.vgpr) ins(i32)
+// CHECK:           %[[VAL_0:.*]] = amdgcn.v_and_b32 outs(%[[SPLIT_REGISTER_RANGE_0]]#0) ins(%[[ARG1]], %[[MASK]]) : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr)
+// CHECK:           %[[VAL_1:.*]] = amdgcn.v_mov_b32 outs(%[[SPLIT_REGISTER_RANGE_0]]#1) ins(%[[CONSTANT_0]]) : outs(!amdgcn.vgpr) ins(i32)
+// CHECK:           %[[MAKE_REGISTER_RANGE_0:.*]] = amdgcn.make_register_range %[[VAL_0]], %[[VAL_1]] : !amdgcn.vgpr, !amdgcn.vgpr
+// CHECK:           return %[[MAKE_REGISTER_RANGE_0]] : !amdgcn.vgpr<[? + 2]>
+// CHECK:         }
+func.func @test_extui_i8_to_i64_vgpr(%dst: !amdgcn.vgpr<[? + 2]>, %value: !amdgcn.vgpr) -> !amdgcn.vgpr<[? + 2]> {
+  %res = lsir.extui i64 from i8 %dst, %value : !amdgcn.vgpr<[? + 2]>, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr<[? + 2]>
+}
+
+// Test ExtUIOp (zero extension i1->i64) - VGPR
+// CHECK-LABEL:   func.func @test_extui_i1_to_i64_vgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.vgpr<[? + 2]>,
+// CHECK-SAME:      %[[ARG1:.*]]: !amdgcn.vgpr) -> !amdgcn.vgpr<[? + 2]> {
+// CHECK:           %[[CONSTANT_0:.*]] = arith.constant 0 : i32
+// CHECK:           %[[CONSTANT_1:.*]] = arith.constant 1 : i32
+// CHECK:           %[[SPLIT_REGISTER_RANGE_0:.*]]:2 = amdgcn.split_register_range %[[ARG0]] : !amdgcn.vgpr<[? + 2]>
+// CHECK:           %[[VAL_0:.*]] = amdgcn.v_and_b32 outs(%[[SPLIT_REGISTER_RANGE_0]]#0) ins(%[[ARG1]], %[[CONSTANT_1]]) : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, i32)
+// CHECK:           %[[VAL_1:.*]] = amdgcn.v_mov_b32 outs(%[[SPLIT_REGISTER_RANGE_0]]#1) ins(%[[CONSTANT_0]]) : outs(!amdgcn.vgpr) ins(i32)
+// CHECK:           %[[MAKE_REGISTER_RANGE_0:.*]] = amdgcn.make_register_range %[[VAL_0]], %[[VAL_1]] : !amdgcn.vgpr, !amdgcn.vgpr
+// CHECK:           return %[[MAKE_REGISTER_RANGE_0]] : !amdgcn.vgpr<[? + 2]>
+// CHECK:         }
+func.func @test_extui_i1_to_i64_vgpr(%dst: !amdgcn.vgpr<[? + 2]>, %value: !amdgcn.vgpr) -> !amdgcn.vgpr<[? + 2]> {
+  %res = lsir.extui i64 from i1 %dst, %value : !amdgcn.vgpr<[? + 2]>, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr<[? + 2]>
+}
+
+// Test ExtUIOp (zero extension i8->i64) - SGPR
+// CHECK-LABEL:   func.func @test_extui_i8_to_i64_sgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.sgpr<[? + 2]>,
+// CHECK-SAME:      %[[ARG1:.*]]: !amdgcn.sgpr) -> !amdgcn.sgpr<[? + 2]> {
+// CHECK:           %[[CONSTANT_0:.*]] = arith.constant 0 : i32
+// CHECK:           %[[CONSTANT_1:.*]] = arith.constant 255 : i32
+// CHECK:           %[[SPLIT_REGISTER_RANGE_0:.*]]:2 = amdgcn.split_register_range %[[ARG0]] : !amdgcn.sgpr<[? + 2]>
+// CHECK:           %[[SCC_ALLOCA_0:.*]] = amdgcn.alloca : !amdgcn.scc<0>
+// CHECK:           %[[VAL_0:.*]] = amdgcn.s_and_b32 outs(%[[SPLIT_REGISTER_RANGE_0]]#0, %[[SCC_ALLOCA_0]]) ins(%[[ARG1]], %[[CONSTANT_1]]) : outs(!amdgcn.sgpr, !amdgcn.scc<0>) ins(!amdgcn.sgpr, i32)
+// CHECK:           %[[VAL_1:.*]] = amdgcn.s_mov_b32 outs(%[[SPLIT_REGISTER_RANGE_0]]#1) ins(%[[CONSTANT_0]]) : outs(!amdgcn.sgpr) ins(i32)
+// CHECK:           %[[MAKE_REGISTER_RANGE_0:.*]] = amdgcn.make_register_range %[[VAL_0]], %[[VAL_1]] : !amdgcn.sgpr, !amdgcn.sgpr
+// CHECK:           return %[[MAKE_REGISTER_RANGE_0]] : !amdgcn.sgpr<[? + 2]>
+// CHECK:         }
+func.func @test_extui_i8_to_i64_sgpr(%dst: !amdgcn.sgpr<[? + 2]>, %value: !amdgcn.sgpr) -> !amdgcn.sgpr<[? + 2]> {
+  %res = lsir.extui i64 from i8 %dst, %value : !amdgcn.sgpr<[? + 2]>, !amdgcn.sgpr
+  return %res : !amdgcn.sgpr<[? + 2]>
+}
+
+// Test ExtUIOp (zero extension i1->i64) - SGPR
+// CHECK-LABEL:   func.func @test_extui_i1_to_i64_sgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.sgpr<[? + 2]>,
+// CHECK-SAME:      %[[ARG1:.*]]: !amdgcn.sgpr) -> !amdgcn.sgpr<[? + 2]> {
+// CHECK:           %[[CONSTANT_0:.*]] = arith.constant 0 : i32
+// CHECK:           %[[CONSTANT_1:.*]] = arith.constant 1 : i32
+// CHECK:           %[[SPLIT_REGISTER_RANGE_0:.*]]:2 = amdgcn.split_register_range %[[ARG0]] : !amdgcn.sgpr<[? + 2]>
+// CHECK:           %[[SCC_ALLOCA_0:.*]] = amdgcn.alloca : !amdgcn.scc<0>
+// CHECK:           %[[VAL_0:.*]] = amdgcn.s_and_b32 outs(%[[SPLIT_REGISTER_RANGE_0]]#0, %[[SCC_ALLOCA_0]]) ins(%[[ARG1]], %[[CONSTANT_1]]) : outs(!amdgcn.sgpr, !amdgcn.scc<0>) ins(!amdgcn.sgpr, i32)
+// CHECK:           %[[VAL_1:.*]] = amdgcn.s_mov_b32 outs(%[[SPLIT_REGISTER_RANGE_0]]#1) ins(%[[CONSTANT_0]]) : outs(!amdgcn.sgpr) ins(i32)
+// CHECK:           %[[MAKE_REGISTER_RANGE_0:.*]] = amdgcn.make_register_range %[[VAL_0]], %[[VAL_1]] : !amdgcn.sgpr, !amdgcn.sgpr
+// CHECK:           return %[[MAKE_REGISTER_RANGE_0]] : !amdgcn.sgpr<[? + 2]>
+// CHECK:         }
+func.func @test_extui_i1_to_i64_sgpr(%dst: !amdgcn.sgpr<[? + 2]>, %value: !amdgcn.sgpr) -> !amdgcn.sgpr<[? + 2]> {
+  %res = lsir.extui i64 from i1 %dst, %value : !amdgcn.sgpr<[? + 2]>, !amdgcn.sgpr
+  return %res : !amdgcn.sgpr<[? + 2]>
+}
+
+// Test TruncIOp (truncation i64->i32) - SGPR
+// CHECK-LABEL:   func.func @test_trunci_i64_to_i32_sgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.sgpr,
+// CHECK-SAME:      %[[ARG1:.*]]: !amdgcn.sgpr<[? + 2]>) -> !amdgcn.sgpr {
+// CHECK:           %[[SPLIT_REGISTER_RANGE_0:.*]]:2 = amdgcn.split_register_range %[[ARG1]] : !amdgcn.sgpr<[? + 2]>
+// CHECK:           %[[COPY_0:.*]] = lsir.copy %[[ARG0]], %[[SPLIT_REGISTER_RANGE_0]]#0 : !amdgcn.sgpr, !amdgcn.sgpr
+// CHECK:           return %[[COPY_0]] : !amdgcn.sgpr
+// CHECK:         }
+func.func @test_trunci_i64_to_i32_sgpr(%dst: !amdgcn.sgpr, %value: !amdgcn.sgpr<[? + 2]>) -> !amdgcn.sgpr {
+  %res = lsir.trunci i32 from i64 %dst, %value : !amdgcn.sgpr, !amdgcn.sgpr<[? + 2]>
+  return %res : !amdgcn.sgpr
+}
+
+// Test TruncIOp (truncation i64->i32) - VGPR
+// CHECK-LABEL:   func.func @test_trunci_i64_to_i32_vgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.vgpr,
+// CHECK-SAME:      %[[ARG1:.*]]: !amdgcn.vgpr<[? + 2]>) -> !amdgcn.vgpr {
+// CHECK:           %[[SPLIT_REGISTER_RANGE_0:.*]]:2 = amdgcn.split_register_range %[[ARG1]] : !amdgcn.vgpr<[? + 2]>
+// CHECK:           %[[COPY_0:.*]] = lsir.copy %[[ARG0]], %[[SPLIT_REGISTER_RANGE_0]]#0 : !amdgcn.vgpr, !amdgcn.vgpr
+// CHECK:           return %[[COPY_0]] : !amdgcn.vgpr
+// CHECK:         }
+func.func @test_trunci_i64_to_i32_vgpr(%dst: !amdgcn.vgpr, %value: !amdgcn.vgpr<[? + 2]>) -> !amdgcn.vgpr {
+  %res = lsir.trunci i32 from i64 %dst, %value : !amdgcn.vgpr, !amdgcn.vgpr<[? + 2]>
+  return %res : !amdgcn.vgpr
+}
+
+// Test TruncIOp (truncation i32->i16) - VGPR
+// CHECK-LABEL:   func.func @test_trunci_i32_to_i16_vgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.vgpr,
+// CHECK-SAME:      %[[ARG1:.*]]: !amdgcn.vgpr) -> !amdgcn.vgpr {
+// CHECK:           %[[COPY_0:.*]] = lsir.copy %[[ARG0]], %[[ARG1]] : !amdgcn.vgpr, !amdgcn.vgpr
+// CHECK:           return %[[COPY_0]] : !amdgcn.vgpr
+// CHECK:         }
+func.func @test_trunci_i32_to_i16_vgpr(%dst: !amdgcn.vgpr, %value: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %res = lsir.trunci i16 from i32 %dst, %value : !amdgcn.vgpr, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr
+}
+
+// Test TruncIOp (truncation i32->i8) - SGPR
+// CHECK-LABEL:   func.func @test_trunci_i32_to_i8_sgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.sgpr,
+// CHECK-SAME:      %[[ARG1:.*]]: !amdgcn.sgpr) -> !amdgcn.sgpr {
+// CHECK:           %[[CONSTANT_0:.*]] = arith.constant 255 : i32
+// CHECK:           %[[ALLOCA_0:.*]] = amdgcn.alloca : !amdgcn.scc<0>
+// CHECK:           %[[VAL_0:.*]] = amdgcn.s_and_b32 outs(%[[ARG0]], %[[ALLOCA_0]]) ins(%[[ARG1]], %[[CONSTANT_0]]) : outs(!amdgcn.sgpr, !amdgcn.scc<0>) ins(!amdgcn.sgpr, i32)
+// CHECK:           return %[[VAL_0]] : !amdgcn.sgpr
+// CHECK:         }
+func.func @test_trunci_i32_to_i8_sgpr(%dst: !amdgcn.sgpr, %value: !amdgcn.sgpr) -> !amdgcn.sgpr {
+  %res = lsir.trunci i8 from i32 %dst, %value : !amdgcn.sgpr, !amdgcn.sgpr
+  return %res : !amdgcn.sgpr
+}
+
+// Test TruncIOp (truncation i32->i8) - VGPR
+// CHECK-LABEL:   func.func @test_trunci_i32_to_i8_vgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.vgpr,
+// CHECK-SAME:      %[[ARG1:.*]]: !amdgcn.vgpr) -> !amdgcn.vgpr {
+// CHECK:           %[[CONSTANT_0:.*]] = arith.constant 255 : i32
+// CHECK:           %[[TMP:.*]] = amdgcn.alloca : !amdgcn.vgpr
+// CHECK:           %[[MASK:.*]] = amdgcn.v_mov_b32 outs(%[[TMP]]) ins(%[[CONSTANT_0]]) : outs(!amdgcn.vgpr) ins(i32)
+// CHECK:           %[[VAL_0:.*]] = amdgcn.v_and_b32 outs(%[[ARG0]]) ins(%[[ARG1]], %[[MASK]]) : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr)
+// CHECK:           return %[[VAL_0]] : !amdgcn.vgpr
+// CHECK:         }
+func.func @test_trunci_i32_to_i8_vgpr(%dst: !amdgcn.vgpr, %value: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %res = lsir.trunci i8 from i32 %dst, %value : !amdgcn.vgpr, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr
+}
+
+// Test TruncIOp (truncation i32->i1) - VGPR
+// CHECK-LABEL:   func.func @test_trunci_i32_to_i1_vgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.vgpr,
+// CHECK-SAME:      %[[ARG1:.*]]: !amdgcn.vgpr) -> !amdgcn.vgpr {
+// CHECK:           %[[CONSTANT_0:.*]] = arith.constant 1 : i32
+// CHECK:           %[[VAL_0:.*]] = amdgcn.v_and_b32 outs(%[[ARG0]]) ins(%[[ARG1]], %[[CONSTANT_0]]) : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, i32)
+// CHECK:           return %[[VAL_0]] : !amdgcn.vgpr
+// CHECK:         }
+func.func @test_trunci_i32_to_i1_vgpr(%dst: !amdgcn.vgpr, %value: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %res = lsir.trunci i1 from i32 %dst, %value : !amdgcn.vgpr, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr
+}
+
+// Test TruncIOp (truncation i32->i16) - SGPR
+// CHECK-LABEL:   func.func @test_trunci_i32_to_i16_sgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.sgpr,
+// CHECK-SAME:      %[[ARG1:.*]]: !amdgcn.sgpr) -> !amdgcn.sgpr {
+// CHECK:           %[[COPY_0:.*]] = lsir.copy %[[ARG0]], %[[ARG1]] : !amdgcn.sgpr, !amdgcn.sgpr
+// CHECK:           return %[[COPY_0]] : !amdgcn.sgpr
+// CHECK:         }
+func.func @test_trunci_i32_to_i16_sgpr(%dst: !amdgcn.sgpr, %value: !amdgcn.sgpr) -> !amdgcn.sgpr {
+  %res = lsir.trunci i16 from i32 %dst, %value : !amdgcn.sgpr, !amdgcn.sgpr
+  return %res : !amdgcn.sgpr
+}
+
+// Test TruncIOp (truncation i32->i1) - SGPR
+// CHECK-LABEL:   func.func @test_trunci_i32_to_i1_sgpr(
+// CHECK-SAME:      %[[ARG0:.*]]: !amdgcn.sgpr,
+// CHECK-SAME:      %[[ARG1:.*]]: !amdgcn.sgpr) -> !amdgcn.sgpr {
+// CHECK:           %[[CONSTANT_0:.*]] = arith.constant 1 : i32
+// CHECK:           %[[SCC_ALLOCA_0:.*]] = amdgcn.alloca : !amdgcn.scc<0>
+// CHECK:           %[[VAL_0:.*]] = amdgcn.s_and_b32 outs(%[[ARG0]], %[[SCC_ALLOCA_0]]) ins(%[[ARG1]], %[[CONSTANT_0]]) : outs(!amdgcn.sgpr, !amdgcn.scc<0>) ins(!amdgcn.sgpr, i32)
+// CHECK:           return %[[VAL_0]] : !amdgcn.sgpr
+// CHECK:         }
+func.func @test_trunci_i32_to_i1_sgpr(%dst: !amdgcn.sgpr, %value: !amdgcn.sgpr) -> !amdgcn.sgpr {
+  %res = lsir.trunci i1 from i32 %dst, %value : !amdgcn.sgpr, !amdgcn.sgpr
+  return %res : !amdgcn.sgpr
 }
 
 // Trivial: no offsets - ptr_add is replaced with ptr
@@ -1568,4 +1925,147 @@ func.func @test_divsi_i32(%dst: !amdgcn.vgpr, %a: !amdgcn.vgpr, %b: !amdgcn.vgpr
 func.func @test_remsi_i32(%dst: !amdgcn.vgpr, %a: !amdgcn.vgpr, %b: !amdgcn.vgpr) -> !amdgcn.vgpr {
   %r = lsir.remsi i32 %dst, %a, %b : !amdgcn.vgpr, !amdgcn.vgpr, !amdgcn.vgpr
   return %r : !amdgcn.vgpr
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_extf_f16_to_f32_vgpr
+// CHECK-SAME: (%[[DST:.*]]: !amdgcn.vgpr, %[[VAL:.*]]: !amdgcn.vgpr)
+// CHECK: amdgcn.v_cvt_f32_f16 outs(%[[DST]]) ins(%[[VAL]])
+func.func @test_extf_f16_to_f32_vgpr(%dst: !amdgcn.vgpr, %value: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %res = lsir.extf f32 from f16 %dst, %value : !amdgcn.vgpr, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_extf_f32_to_f64_vgpr
+// CHECK-SAME: (%[[DST:.*]]: !amdgcn.vgpr<[? + 2]>, %[[VAL:.*]]: !amdgcn.vgpr)
+// CHECK: amdgcn.v_cvt_f64_f32 outs(%[[DST]]) ins(%[[VAL]])
+func.func @test_extf_f32_to_f64_vgpr(%dst: !amdgcn.vgpr<[? + 2]>, %value: !amdgcn.vgpr) -> !amdgcn.vgpr<[? + 2]> {
+  %res = lsir.extf f64 from f32 %dst, %value : !amdgcn.vgpr<[? + 2]>, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr<[? + 2]>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_truncf_f32_to_f16_vgpr
+// CHECK-SAME: (%[[DST:.*]]: !amdgcn.vgpr, %[[VAL:.*]]: !amdgcn.vgpr)
+// CHECK: amdgcn.v_cvt_f16_f32 outs(%[[DST]]) ins(%[[VAL]])
+func.func @test_truncf_f32_to_f16_vgpr(%dst: !amdgcn.vgpr, %value: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %res = lsir.truncf f16 from f32 %dst, %value : !amdgcn.vgpr, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_truncf_f64_to_f32_vgpr
+// CHECK-SAME: (%[[DST:.*]]: !amdgcn.vgpr, %[[VAL:.*]]: !amdgcn.vgpr<[? + 2]>)
+// CHECK: amdgcn.v_cvt_f32_f64 outs(%[[DST]]) ins(%[[VAL]])
+func.func @test_truncf_f64_to_f32_vgpr(%dst: !amdgcn.vgpr, %value: !amdgcn.vgpr<[? + 2]>) -> !amdgcn.vgpr {
+  %res = lsir.truncf f32 from f64 %dst, %value : !amdgcn.vgpr, !amdgcn.vgpr<[? + 2]>
+  return %res : !amdgcn.vgpr
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_sitofp_i32_to_f32_vgpr
+// CHECK-SAME: (%[[DST:.*]]: !amdgcn.vgpr, %[[VAL:.*]]: !amdgcn.vgpr)
+// CHECK: amdgcn.v_cvt_f32_i32 outs(%[[DST]]) ins(%[[VAL]])
+func.func @test_sitofp_i32_to_f32_vgpr(%dst: !amdgcn.vgpr, %value: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %res = lsir.sitofp f32 from i32 %dst, %value : !amdgcn.vgpr, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_sitofp_i32_to_f64_vgpr
+// CHECK-SAME: (%[[DST:.*]]: !amdgcn.vgpr<[? + 2]>, %[[VAL:.*]]: !amdgcn.vgpr)
+// CHECK: amdgcn.v_cvt_f64_i32 outs(%[[DST]]) ins(%[[VAL]])
+func.func @test_sitofp_i32_to_f64_vgpr(%dst: !amdgcn.vgpr<[? + 2]>, %value: !amdgcn.vgpr) -> !amdgcn.vgpr<[? + 2]> {
+  %res = lsir.sitofp f64 from i32 %dst, %value : !amdgcn.vgpr<[? + 2]>, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr<[? + 2]>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_uitofp_i32_to_f32_vgpr
+// CHECK-SAME: (%[[DST:.*]]: !amdgcn.vgpr, %[[VAL:.*]]: !amdgcn.vgpr)
+// CHECK: amdgcn.v_cvt_f32_u32 outs(%[[DST]]) ins(%[[VAL]])
+func.func @test_uitofp_i32_to_f32_vgpr(%dst: !amdgcn.vgpr, %value: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %res = lsir.uitofp f32 from i32 %dst, %value : !amdgcn.vgpr, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_uitofp_i32_to_f64_vgpr
+// CHECK-SAME: (%[[DST:.*]]: !amdgcn.vgpr<[? + 2]>, %[[VAL:.*]]: !amdgcn.vgpr)
+// CHECK: amdgcn.v_cvt_f64_u32 outs(%[[DST]]) ins(%[[VAL]])
+func.func @test_uitofp_i32_to_f64_vgpr(%dst: !amdgcn.vgpr<[? + 2]>, %value: !amdgcn.vgpr) -> !amdgcn.vgpr<[? + 2]> {
+  %res = lsir.uitofp f64 from i32 %dst, %value : !amdgcn.vgpr<[? + 2]>, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr<[? + 2]>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_fptosi_f32_to_i32_vgpr
+// CHECK-SAME: (%[[DST:.*]]: !amdgcn.vgpr, %[[VAL:.*]]: !amdgcn.vgpr)
+// CHECK: amdgcn.v_cvt_i32_f32 outs(%[[DST]]) ins(%[[VAL]])
+func.func @test_fptosi_f32_to_i32_vgpr(%dst: !amdgcn.vgpr, %value: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %res = lsir.fptosi i32 from f32 %dst, %value : !amdgcn.vgpr, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_fptosi_f64_to_i32_vgpr
+// CHECK-SAME: (%[[DST:.*]]: !amdgcn.vgpr, %[[VAL:.*]]: !amdgcn.vgpr<[? + 2]>)
+// CHECK: amdgcn.v_cvt_i32_f64 outs(%[[DST]]) ins(%[[VAL]])
+func.func @test_fptosi_f64_to_i32_vgpr(%dst: !amdgcn.vgpr, %value: !amdgcn.vgpr<[? + 2]>) -> !amdgcn.vgpr {
+  %res = lsir.fptosi i32 from f64 %dst, %value : !amdgcn.vgpr, !amdgcn.vgpr<[? + 2]>
+  return %res : !amdgcn.vgpr
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_fptoui_f32_to_i32_vgpr
+// CHECK-SAME: (%[[DST:.*]]: !amdgcn.vgpr, %[[VAL:.*]]: !amdgcn.vgpr)
+// CHECK: amdgcn.v_cvt_u32_f32 outs(%[[DST]]) ins(%[[VAL]])
+func.func @test_fptoui_f32_to_i32_vgpr(%dst: !amdgcn.vgpr, %value: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %res = lsir.fptoui i32 from f32 %dst, %value : !amdgcn.vgpr, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_fptoui_f64_to_i32_vgpr
+// CHECK-SAME: (%[[DST:.*]]: !amdgcn.vgpr, %[[VAL:.*]]: !amdgcn.vgpr<[? + 2]>)
+// CHECK: amdgcn.v_cvt_u32_f64 outs(%[[DST]]) ins(%[[VAL]])
+func.func @test_fptoui_f64_to_i32_vgpr(%dst: !amdgcn.vgpr, %value: !amdgcn.vgpr<[? + 2]>) -> !amdgcn.vgpr {
+  %res = lsir.fptoui i32 from f64 %dst, %value : !amdgcn.vgpr, !amdgcn.vgpr<[? + 2]>
+  return %res : !amdgcn.vgpr
+}
+
+// -----
+
+// extf with an SGPR destination is unsupported (extf dst must be a VGPR);
+// the op is left unconverted.
+// CHECK-LABEL: func.func @test_extf_f16_to_f32_sgpr_unsupported
+// CHECK: lsir.extf
+func.func @test_extf_f16_to_f32_sgpr_unsupported(%dst: !amdgcn.sgpr, %value: !amdgcn.sgpr) -> !amdgcn.sgpr {
+  %res = lsir.extf f32 from f16 %dst, %value : !amdgcn.sgpr, !amdgcn.sgpr
+  return %res : !amdgcn.sgpr
+}
+
+// -----
+
+// fptosi producing an i64 result into an SGPR destination is unsupported
+// (fptosi dst must be a VGPR and only 32-bit integer results are handled);
+// the op is left unconverted.
+// CHECK-LABEL: func.func @test_fptosi_f64_to_i64_sgpr_unsupported
+// CHECK: lsir.fptosi
+func.func @test_fptosi_f64_to_i64_sgpr_unsupported(%dst: !amdgcn.sgpr<[? + 2]>, %value: !amdgcn.sgpr<[? + 2]>) -> !amdgcn.sgpr<[? + 2]> {
+  %res = lsir.fptosi i64 from f64 %dst, %value : !amdgcn.sgpr<[? + 2]>, !amdgcn.sgpr<[? + 2]>
+  return %res : !amdgcn.sgpr<[? + 2]>
 }
