@@ -15,6 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "aster/Dialect/AMDGCN/IR/AMDGCNOps.h"
+#include "aster/Dialect/AMDGCN/IR/Utils.h"
 #include "aster/Target/ASM/AsmPrinter.h"
 #include "aster/Target/ASM/TranslateModule.h"
 #include "mlir/IR/Value.h"

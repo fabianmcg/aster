@@ -706,6 +706,123 @@ def GlobalStoreDwordx4 : GlobalStoreDwordInst<"global_store_dwordx4",
 #endif // GLOBALSTOREDWORDX4_DEF
 
 //===----------------------------------------------------------------------===//
+// Global Atomic Instructions
+//===----------------------------------------------------------------------===//
+
+#ifndef GLOBALATOMICINST_DEF
+#define GLOBALATOMICINST_DEF
+class GlobalAtomicInst<string mnemonic, list<Type> dst0Type, list<Type> dataType>
+    : AMDISAInstruction<mnemonic> {
+  let props = [IsVMem, IsGlobal];
+  let archs = [CDNA3Isa, CDNA4Isa];
+  let effects = [GlobalRead, GlobalWrite];
+  let outputs = (ins
+    AnyRegOf<dst0Type>:$dst0
+  );
+  let inputs = (ins
+    AnyRegOf<dataType>:$data,
+    AnyRegOf<[VGPROf<2>, TwoSGPROrVCCType]>:$addr,
+    OptionalReg<VGPROf<1>>:$offset
+  );
+  let trailingArgs = (ins
+    OffsetType<13, /*signed=*/true>:$const_offset,
+    NT:$nt,
+    SC0:$sc0,
+    SC1:$sc1
+  );
+  let trailingResults = (outs FlatWriteToken:$token);
+  let genInstAssemblyFormat = 0;
+  let assemblyFormat = [{
+    `dst0` $dst0 `data` $data `addr` $addr
+    `offset` (`d` `(`$offset^ `)` `+`)? `c` `(`$const_offset`)` attr-dict `:`
+    `outs` `(` type($dst0) `)` `ins` `(` type($data) `,` type($addr) (`,` type($offset)^)? `)`
+    `mods` `(` type($const_offset) `)`
+    `->` custom<LoadResults>(ref(type($dst0)), type($dst0_res), type($token))
+  }];
+  let asm_syntax = [
+    // CDNA3 no-return (sc0=0): omit $dst0; addr is VGPR pair (2 VGPRs for 64-bit ptr).
+    ASMString<[ENC_FLAT_GLBL_CDNA3],
+      "${mnemonic} $addr, $data, off [const_offset] [nt] [sc1]",
+      CPred<"isVGPR($_self.getAddr().getType(), 2) && !$_self.getSc0()">>,
+    // CDNA3 no-return (sc0=0): omit $dst0; addr is SGPR pair (2 SGPRs for 64-bit ptr).
+    ASMString<[ENC_FLAT_GLBL_CDNA3],
+      "${mnemonic} $offset, $data, $addr [const_offset] [nt] [sc1]",
+      CPred<"isSGPR($_self.getAddr().getType(), 2) && !$_self.getSc0()">>,
+    // CDNA3 with-return (sc0=1): emit $dst0 first; addr is VGPR pair.
+    ASMString<[ENC_FLAT_GLBL_CDNA3],
+      "${mnemonic} $dst0, $addr, $data, off [const_offset] [sc0] [nt] [sc1]",
+      CPred<"isVGPR($_self.getAddr().getType(), 2) && $_self.getSc0()">>,
+    // CDNA3 with-return (sc0=1): emit $dst0 first; addr is SGPR pair.
+    ASMString<[ENC_FLAT_GLBL_CDNA3],
+      "${mnemonic} $dst0, $offset, $data, $addr [const_offset] [sc0] [nt] [sc1]",
+      CPred<"isSGPR($_self.getAddr().getType(), 2) && $_self.getSc0()">>,
+    // CDNA4 no-return (sc0=0): omit $dst0; addr is VGPR pair.
+    ASMString<[ENC_FLAT_GLBL_CDNA4],
+      "${mnemonic} $addr, $data, off [const_offset] [sc1] [nt]",
+      CPred<"isVGPR($_self.getAddr().getType(), 2) && !$_self.getSc0()">>,
+    // CDNA4 no-return (sc0=0): omit $dst0; addr is SGPR pair.
+    ASMString<[ENC_FLAT_GLBL_CDNA4],
+      "${mnemonic} $offset, $data, $addr [const_offset] [sc1] [nt]",
+      CPred<"isSGPR($_self.getAddr().getType(), 2) && !$_self.getSc0()">>,
+    // CDNA4 with-return (sc0=1): emit $dst0 first; addr is VGPR pair.
+    ASMString<[ENC_FLAT_GLBL_CDNA4],
+      "${mnemonic} $dst0, $addr, $data, off [const_offset] [sc0] [sc1] [nt]",
+      CPred<"isVGPR($_self.getAddr().getType(), 2) && $_self.getSc0()">>,
+    // CDNA4 with-return (sc0=1): emit $dst0 first; addr is SGPR pair.
+    ASMString<[ENC_FLAT_GLBL_CDNA4],
+      "${mnemonic} $dst0, $offset, $data, $addr [const_offset] [sc0] [sc1] [nt]",
+      CPred<"isSGPR($_self.getAddr().getType(), 2) && $_self.getSc0()">>,
+  ];
+  let hasVerifier = 1;
+  let extraClassDefinition = [{
+    LogicalResult $cppClass::verify() {
+      // Use isSGPR/isVGPR(type, 2) to handle both single and range types after
+      // register allocation (isa<SGPRType> only matches single-register types).
+      if (isVGPR(getAddr().getType(), 2) && getOffset())
+        return emitError("expects no offset with VGPR address");
+      if (isSGPR(getAddr().getType(), 2) && !getOffset())
+        return emitError("expects an offset with SGPR address");
+      auto regTy = dyn_cast<RegisterTypeInterface>(getDst0().getType());
+      bool hasValueResult = regTy && regTy.hasValueSemantics();
+      if (hasValueResult && !getSc0())
+        return emitError("result may only be produced when sc0 is set");
+      return success();
+    }
+  }];
+}
+#endif // GLOBALATOMICINST_DEF
+
+#ifndef GLOBALATOMICADDF32_DEF
+#define GLOBALATOMICADDF32_DEF
+def GlobalAtomicAddF32 : GlobalAtomicInst<"global_atomic_add_f32",
+    /*dst0=*/[VGPROrAGPROf<1>],
+    /*data=*/[VGPROrAGPROf<1>]
+  > {
+  let description = [{
+    Add a single-precision float value in the data register to a location in
+    the global aperture. Store the original value from global aperture into a
+    vector register iff the SC0 bit is set.
+  }];
+  let encodings = [InstEnc<[ENC_FLAT_GLBL_CDNA3, ENC_FLAT_GLBL_CDNA4], 0b1001101>];
+}
+#endif // GLOBALATOMICADDF32_DEF
+
+#ifndef GLOBALATOMICADD_DEF
+#define GLOBALATOMICADD_DEF
+def GlobalAtomicAdd : GlobalAtomicInst<"global_atomic_add",
+    /*dst0=*/[VGPROrAGPROf<1>],
+    /*data=*/[VGPROrAGPROf<1>]
+  > {
+  let description = [{
+    Add two unsigned 32-bit integer values stored in the data register and a
+    location in the global aperture. Store the original value from global
+    aperture into a vector register iff the SC0 bit is set.
+  }];
+  let encodings = [InstEnc<[ENC_FLAT_GLBL_CDNA3, ENC_FLAT_GLBL_CDNA4], 0b1000010>];
+}
+#endif // GLOBALATOMICADD_DEF
+
+//===----------------------------------------------------------------------===//
 // VIMAGE Tensor Instructions (gfx1250/gfx1251 only)
 //===----------------------------------------------------------------------===//
 

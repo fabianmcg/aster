@@ -63,6 +63,8 @@ from aster.dialects._amdgcn_ops_gen import (
     GlobalLoadDwordx2,
     GlobalLoadB128,
     GlobalLoadDwordx4,
+    GlobalAtomicAdd,
+    GlobalAtomicAddF32,
     GlobalStoreB32,
     GlobalStoreDword,
     GlobalStoreDwordx4,
@@ -793,6 +795,18 @@ class KernelBuilder:
         )
         return op.operation.results[0]
 
+    def v_readfirstlane(self, vgpr_val: ir.Value) -> ir.Value:
+        """Read the value from the first active lane into a fresh SGPR."""
+        sgpr = self.alloca_sgpr()
+        op = _VReadfirstlaneB32(
+            dst0=sgpr,
+            src0=vgpr_val,
+            results=[sgpr.type],
+            loc=self._loc,
+            ip=self._kip,
+        )
+        return op.operation.results[0]
+
     # ---------------------------------------------------------------------------
     # Pointer arithmetic (ptr dialect)
     # ---------------------------------------------------------------------------
@@ -1022,6 +1036,7 @@ class KernelBuilder:
         addr: ir.Value,
         const_offset: Optional[ir.Value] = None,
         dynamic_offset: Optional[ir.Value] = None,
+        sc1: bool = False,
     ):
         """Global load returning the full op (for data + token access).
 
@@ -1037,6 +1052,7 @@ class KernelBuilder:
             addr=addr,
             const_offset=const_offset,
             offset=dynamic_offset,
+            sc1=sc1,
             loc=self._loc,
             ip=self._kip,
         )
@@ -1046,10 +1062,14 @@ class KernelBuilder:
         self,
         addr: ir.Value,
         const_offset: Optional[ir.Value] = None,
+        dynamic_offset: Optional[ir.Value] = None,
+        sc1: bool = False,
     ) -> tuple[ir.Value, ir.Value]:
         """Global load of 1 dword."""
-        dest = self._make_register_range([self.alloca_vgpr()])
-        op = self._global_load_op("global_load_dword", dest, addr, const_offset)
+        dest = self.alloca_vgpr()
+        op = self._global_load_op(
+            "global_load_dword", dest, addr, const_offset, dynamic_offset, sc1=sc1
+        )
         return op.results[0], op.results[1]
 
     # Note: global_load/store_dwordx2/3 do not have coalescing and do not fill a
@@ -1108,6 +1128,7 @@ class KernelBuilder:
         const_offset: Optional[ir.Value] = None,
         dynamic_offset: Optional[ir.Value] = None,
         nt: bool = False,
+        sc1: bool = False,
     ) -> ir.Value:
         """Global store with optional dynamic_offset for saddr+vaddr."""
         if const_offset is None:
@@ -1119,6 +1140,7 @@ class KernelBuilder:
             const_offset=const_offset,
             offset=dynamic_offset,
             nt=nt,
+            sc1=sc1,
             loc=self._loc,
             ip=self._kip,
         )
@@ -1131,10 +1153,17 @@ class KernelBuilder:
         const_offset: Optional[ir.Value] = None,
         dynamic_offset: Optional[ir.Value] = None,
         nt: bool = False,
+        sc1: bool = False,
     ) -> ir.Value:
         """Global store of 1 dword (CDNA3/4)."""
         return self._global_store(
-            "global_store_dword", data, addr, const_offset, dynamic_offset, nt=nt
+            "global_store_dword",
+            data,
+            addr,
+            const_offset,
+            dynamic_offset,
+            nt=nt,
+            sc1=sc1,
         )
 
     def global_store_b32(
@@ -1148,6 +1177,121 @@ class KernelBuilder:
         """Global store of 32 bits (gfx1250)."""
         return self._global_store(
             "global_store_b32", data, addr, const_offset, dynamic_offset, nt=nt
+        )
+
+    def _global_atomic(
+        self,
+        op_cls,
+        data: ir.Value,
+        addr: ir.Value,
+        const_offset: Optional[ir.Value] = None,
+        dynamic_offset: Optional[ir.Value] = None,
+        nt: bool = False,
+        sc0: bool = False,
+        sc1: bool = False,
+    ) -> ir.Value:
+        """Emit a global atomic read-modify-write instruction.
+
+        When sc0=False (default): returns the write-token only. Uses an
+        unallocated VGPR dst so the verifier permits sc0=False. Float
+        atomics must always use sc0=False per the CDNA3 ISA spec.
+
+        When sc0=True: uses a value-semantic VGPR dst so the op produces
+        the pre-operation value as an SSA result. Returns (result,
+        token).
+        """
+        if const_offset is None:
+            const_offset = self.constant_i32(0)
+        if sc0:
+            # Value-semantic dst: bare !amdgcn.vgpr causes the op to produce
+            # an SSA result carrying the pre-op value (DPS model).
+            dst0 = AllocaOp(self.vgpr_type, loc=self._loc, ip=self._kip).result
+            op = op_cls(
+                dst0=dst0,
+                data=data,
+                addr=addr,
+                const_offset=const_offset,
+                offset=dynamic_offset,
+                sc0=True,
+                sc1=sc1,
+                nt=nt,
+                results=[self.vgpr_type, self.flat_write_tok],
+                loc=self._loc,
+                ip=self._kip,
+            )
+            return op.results[0], op.results[1]
+        # Unallocated dst: no SSA result for the data operand.
+        unalloc_vgpr_type = ir.Type.parse("!amdgcn.vgpr<?>", context=self._ctx)
+        dst0 = AllocaOp(unalloc_vgpr_type, loc=self._loc, ip=self._kip).result
+        op = op_cls(
+            dst0=dst0,
+            data=data,
+            addr=addr,
+            const_offset=const_offset,
+            offset=dynamic_offset,
+            sc0=False,
+            sc1=sc1,
+            nt=nt,
+            loc=self._loc,
+            ip=self._kip,
+        )
+        return op.results[0]
+
+    def global_atomic_add_f32(
+        self,
+        data: ir.Value,
+        addr: ir.Value,
+        const_offset: Optional[ir.Value] = None,
+        dynamic_offset: Optional[ir.Value] = None,
+        nt: bool = False,
+    ) -> ir.Value:
+        """Global atomic float32 add (CDNA3/4).
+
+        Returns the write-token (old value is discarded).
+        """
+        return self._global_atomic(
+            GlobalAtomicAddF32, data, addr, const_offset, dynamic_offset, nt=nt
+        )
+
+    def global_atomic_add(
+        self,
+        data: ir.Value,
+        addr: ir.Value,
+        const_offset: Optional[ir.Value] = None,
+        dynamic_offset: Optional[ir.Value] = None,
+        nt: bool = False,
+    ) -> ir.Value:
+        """Global atomic uint32 add (CDNA3/4).
+
+        Returns the write-token (old value is discarded).
+        """
+        return self._global_atomic(
+            GlobalAtomicAdd, data, addr, const_offset, dynamic_offset, nt=nt
+        )
+
+    def global_atomic_add_ret(
+        self,
+        data: ir.Value,
+        addr: ir.Value,
+        const_offset: Optional[ir.Value] = None,
+        dynamic_offset: Optional[ir.Value] = None,
+        nt: bool = False,
+        sc1: bool = True,
+    ) -> tuple[ir.Value, ir.Value]:
+        """Global atomic uint32 add returning the pre-op value (sc0=1, device scope).
+
+        Returns (result_value, token) where result_value is the old
+        memory value.
+        """
+        return self._global_atomic(
+            GlobalAtomicAdd,
+            data,
+            addr,
+            const_offset,
+            dynamic_offset,
+            nt=nt,
+            sc0=True,
+            sc1=sc1,
         )
 
     # Note: global_load/store_dwordx2/3 do not have coalescing and do not fill a
