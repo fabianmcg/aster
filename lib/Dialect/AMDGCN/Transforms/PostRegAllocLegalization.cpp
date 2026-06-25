@@ -135,6 +135,13 @@ CopyExpansionPattern::matchAndRewrite(lsir::CopyOp op,
     return success();
   }
 
+  if (isa<SCCType>(op.getSource().getType()) &&
+      isa<SGPRType>(op.getTarget().getType())) {
+    SMovB32::create(rewriter, op.getLoc(), op.getTarget(), op.getSource());
+    rewriter.eraseOp(op);
+    return success();
+  }
+
   // Bail if the copy cannot be performed.
   if (srcTy.getRegisterKind() != RegisterKind::SGPR &&
       tgtTy.getRegisterKind() == RegisterKind::SGPR) {

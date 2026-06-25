@@ -511,6 +511,11 @@ private:
   /// value that would be clobbered.
   void recordDefinition(Value newDef, Type sregTy, Operation *insertBefore);
 
+  /// Handle a clobber of a special register by an out operand that produces no
+  /// tracked SSA value. Promotes any live prior definition before the clobber,
+  /// then invalidates the current definition for the type.
+  void clobberDefinition(Type sregTy, Operation *insertBefore);
+
   /// Promote a special register value to an SGPR. Inserts a copy before
   /// `insertBefore` and rewrites uses dominated by the clobber point.
   void promoteValue(Value sregVal, Operation *insertBefore);
@@ -529,12 +534,38 @@ private:
 
 void SRegBufferization::recordDefinition(Value newDef, Type sregTy,
                                          Operation *insertBefore) {
-  Value prevDef = currentDef.lookup(sregTy);
+  // Skip types that do not accept value semantics (e.g. EXEC).
+  auto regTy = cast<RegisterTypeInterface>(sregTy);
+  if (!bitEnumContainsAll(regTy.getProps(),
+                          RegisterProps::AcceptsValueSemantics))
+    return;
+  // Normalize to the value-semantics form so lookups from both value-semantic
+  // results and allocated-out clobbers resolve to the same map key.
+  Type key = regTy.getAsValue();
+  Value prevDef = currentDef.lookup(key);
   // If there is a live previous definition, promote it before it is
   // clobbered.
   if (prevDef && prevDef != newDef)
     promoteValue(prevDef, insertBefore);
-  currentDef.insert(sregTy, newDef);
+  currentDef.insert(key, newDef);
+}
+
+void SRegBufferization::clobberDefinition(Type sregTy,
+                                          Operation *insertBefore) {
+  // Skip types that do not accept value semantics (e.g. EXEC): they are
+  // fixed hardware registers that cannot be tracked through a value key.
+  auto regTy = cast<RegisterTypeInterface>(sregTy);
+  if (!bitEnumContainsAll(regTy.getProps(),
+                          RegisterProps::AcceptsValueSemantics))
+    return;
+  // Normalize to the value-semantics key to match recordDefinition's key.
+  Type key = regTy.getAsValue();
+  Value prevDef = currentDef.lookup(key);
+  if (prevDef)
+    promoteValue(prevDef, insertBefore);
+  // Clear the current definition so that a subsequent recordDefinition for the
+  // same type does not see the stale pre-clobber value as still live.
+  currentDef.insert(key, Value());
 }
 
 void SRegBufferization::promoteValue(Value sregVal, Operation *insertBefore) {
@@ -596,12 +627,32 @@ LogicalResult SRegBufferization::visitOp(Operation *op) {
   if (!instOp)
     return success();
 
-  // Scan all results for special register definitions.
+  // Scan all results for special register definitions (value-semantic outs).
   for (OpResult result : instOp.getInstResults()) {
     Type resultTy = result.getType();
     if (!isSpecialReg(resultTy))
       continue;
     recordDefinition(result, resultTy, op);
+  }
+
+  // Non-value-semantic special-register outs clobber the physical register
+  // without producing an SSA value, so any live prior definition must be
+  // promoted first.
+  SmallVector<SpecialOperand> specials;
+  instOp.getSpecialOperands(specials);
+  for (SpecialOperand &sp : specials) {
+    if (!sp.isOutput)
+      continue;
+    auto regTy = dyn_cast<RegisterTypeInterface>(sp.getType());
+    // Skip value-semantic outs; those were already handled via getInstResults.
+    // An instruction never has both a value-semantic SCC result and a
+    // non-value-semantic SCC special out for the same physical register, so
+    // this skip prevents double-handling.
+    if (!regTy || regTy.hasValueSemantics())
+      continue;
+    if (!sp.getType().hasTrait<SpecialRegTrait>())
+      continue;
+    clobberDefinition(regTy, op);
   }
 
   return success();
