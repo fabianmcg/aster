@@ -264,6 +264,46 @@ func.func @test_global_store_dwordx2(%addr_lo: !amdgcn.vgpr, %addr_hi: !amdgcn.v
 }
 
 //===----------------------------------------------------------------------===//
+// CDNA3 Global Atomic Operations
+//===----------------------------------------------------------------------===//
+
+// Write-only atomic add f32 with VGPR address (sc0=false, no SSA result).
+func.func @test_global_atomic_add_f32_no_result(
+    %addr_lo: !amdgcn.vgpr, %addr_hi: !amdgcn.vgpr,
+    %data: !amdgcn.vgpr, %dst0: !amdgcn.vgpr<?>) {
+  %addr_range = amdgcn.make_register_range %addr_lo, %addr_hi : !amdgcn.vgpr, !amdgcn.vgpr
+  %c0_i32_atom1 = arith.constant 0 : i32
+  %tok = amdgcn.global_atomic_add_f32 dst0 %dst0 data %data addr %addr_range offset c(%c0_i32_atom1) :
+    outs(!amdgcn.vgpr<?>) ins(!amdgcn.vgpr, !amdgcn.vgpr<[? + 2]>) mods(i32)
+    -> !amdgcn.write_token<flat>
+  return
+}
+
+// Atomic add f32 with result (sc0=true).
+func.func @test_global_atomic_add_f32_with_result(
+    %addr_lo: !amdgcn.vgpr, %addr_hi: !amdgcn.vgpr,
+    %data: !amdgcn.vgpr, %dst0: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %addr_range = amdgcn.make_register_range %addr_lo, %addr_hi : !amdgcn.vgpr, !amdgcn.vgpr
+  %c0_i32_atom2 = arith.constant 0 : i32
+  %result, %tok = amdgcn.global_atomic_add_f32 dst0 %dst0 data %data addr %addr_range offset c(%c0_i32_atom2) {sc0} :
+    outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr<[? + 2]>) mods(i32)
+    -> !amdgcn.write_token<flat>
+  return %result : !amdgcn.vgpr
+}
+
+// Write-only atomic add i32 with VGPR address.
+func.func @test_global_atomic_add_no_result(
+    %addr_lo: !amdgcn.vgpr, %addr_hi: !amdgcn.vgpr,
+    %data: !amdgcn.vgpr, %dst0: !amdgcn.vgpr<?>) {
+  %addr_range = amdgcn.make_register_range %addr_lo, %addr_hi : !amdgcn.vgpr, !amdgcn.vgpr
+  %c0_i32_atom3 = arith.constant 0 : i32
+  %tok = amdgcn.global_atomic_add dst0 %dst0 data %data addr %addr_range offset c(%c0_i32_atom3) :
+    outs(!amdgcn.vgpr<?>) ins(!amdgcn.vgpr, !amdgcn.vgpr<[? + 2]>) mods(i32)
+    -> !amdgcn.write_token<flat>
+  return
+}
+
+//===----------------------------------------------------------------------===//
 // CDNA3 SMEM Load Operations
 //===----------------------------------------------------------------------===//
 

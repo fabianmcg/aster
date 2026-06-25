@@ -16,6 +16,7 @@
 #define ASTER_DIALECT_AMDGCN_IR_INST_METHOD_UTILS_H
 
 #include "aster/Dialect/AMDGCN/IR/AMDGCNOps.h"
+#include "aster/Dialect/AMDGCN/IR/Utils.h"
 #include "aster/IR/InstImpl.h"
 #include "aster/IR/ParsePrintUtils.h"
 #include "mlir/IR/Value.h"
