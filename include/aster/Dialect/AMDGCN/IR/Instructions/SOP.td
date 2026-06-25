@@ -96,6 +96,22 @@ def SAndn2B32 : SOP2Out2In2Inst<"s_andn2_b32",
 }
 #endif // SANDN2B32_DEF
 
+#ifndef SANDN2B64_DEF
+#define SANDN2B64_DEF
+def SAndn2B64 : SOP2Out2In2Inst<"s_andn2_b64",
+    /*dst0=*/[TwoSGPROrSRegType],
+    /*src0=*/[TwoSGPROrSRegOrIntConstType],
+    /*src1=*/[TwoSGPROrSRegOrIntConstType]
+  > {
+  let description = [{
+    Calculate bitwise AND with the first input and the negation of the second
+    input, store the result into a scalar register and set SCC if the result
+    is nonzero.
+  }];
+  let encodings = [InstEnc<[ENC_SOP2_CDNA3, ENC_SOP2_CDNA4, ENC_SOP2_GFX12_50], 0b0010011>];
+}
+#endif // SANDN2B64_DEF
+
 #ifndef SANDB32_DEF
 #define SANDB32_DEF
 def SAndB32 : SOP2Out2In2Inst<"s_and_b32",
@@ -1444,5 +1460,40 @@ def SCmpLtU32 : SCmpInst<"s_cmp_lt_u32"> {
   let encodings = [InstEnc<[ENC_SOPC_CDNA3, ENC_SOPC_CDNA4, ENC_SOPC_GFX12_50], 0b0001010>];
 }
 #endif // SCMPLTU32_DEF
+
+
+#ifndef SOP1OUT3IN2INST_DEF
+#define SOP1OUT3IN2INST_DEF
+/// Saveexec instruction class: dst0 = old EXEC, EXEC = src0 & EXEC, SCC set.
+class SOP1Out3In2Inst<string mnemonic> : AMDISAInstruction<mnemonic> {
+  let props = [IsSALU, IsSOP1];
+  let archs = [CDNA3Isa, CDNA4Isa];
+  let outputs = (ins
+    TwoSGPROrVCCType:$dst0,
+    EXECType:$exec_dst,
+    SCCType:$scc_dst
+  );
+  let inputs = (ins
+    TwoSGPROrSRegOrIntConstType:$src0,
+    EXECType:$exec_src
+  );
+  let trailingArgs = (ins);
+  let asm_syntax = [
+    ASMString<[ENC_SOP1_CDNA3, ENC_SOP1_CDNA4], "${mnemonic} $dst0, $src0">
+  ];
+}
+#endif // SOP1OUT3IN2INST_DEF
+
+#ifndef SANDSAVEEXECB64_DEF
+#define SANDSAVEEXECB64_DEF
+def SAndSaveexecB64 : SOP1Out3In2Inst<"s_and_saveexec_b64"> {
+  let description = [{
+    Calculate bitwise AND on the scalar input and the EXEC mask, store the
+    result into the EXEC mask, set SCC iff the result is nonzero, and store
+    the original EXEC mask value into the scalar destination register.
+  }];
+  let encodings = [InstEnc<[ENC_SOP1_CDNA3, ENC_SOP1_CDNA4], 0b00100000>];
+}
+#endif // SANDSAVEEXECB64_DEF
 
 #endif // AMDGCN_SOP_TD
