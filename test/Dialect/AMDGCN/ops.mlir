@@ -184,6 +184,21 @@ func.func @test_exec_composite() {
   return
 }
 
+// s_and_saveexec_b64: dst0 has value semantics (produces a result), exec_dst
+// and scc_dst must be allocated (no SSA result). EXEC is a composite type and
+// must be composed via make_register_range from its lo/hi parts.
+func.func @test_and_saveexec_b64(%saved_dst: !amdgcn.sgpr<[? + 2]>, %vcc: !amdgcn.vcc) {
+  %exec_lo = amdgcn.alloca : !amdgcn.exec_lo<0>
+  %exec_hi = amdgcn.alloca : !amdgcn.exec_hi<0>
+  %exec = amdgcn.make_register_range %exec_lo, %exec_hi : !amdgcn.exec_lo<0>, !amdgcn.exec_hi<0>
+  %scc_dst = amdgcn.alloca : !amdgcn.scc<0>
+  %exec_out_lo = amdgcn.alloca : !amdgcn.exec_lo<0>
+  %exec_out_hi = amdgcn.alloca : !amdgcn.exec_hi<0>
+  %exec_out = amdgcn.make_register_range %exec_out_lo, %exec_out_hi : !amdgcn.exec_lo<0>, !amdgcn.exec_hi<0>
+  %saved = amdgcn.s_and_saveexec_b64 outs(%saved_dst, %exec_out, %scc_dst) ins(%vcc, %exec) : outs(!amdgcn.sgpr<[? + 2]>, !amdgcn.exec<0>, !amdgcn.scc<0>) ins(!amdgcn.vcc, !amdgcn.exec<0>)
+  return
+}
+
 //===----------------------------------------------------------------------===//
 // VOP1 Operations
 //===----------------------------------------------------------------------===//
