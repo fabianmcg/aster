@@ -11,6 +11,7 @@
 #ifndef AMDGCN_TRANSFORM_PASSES_H
 #define AMDGCN_TRANSFORM_PASSES_H
 
+#include "aster/Dialect/AsterUtils/IR/AsterUtilsDialect.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir::aster {

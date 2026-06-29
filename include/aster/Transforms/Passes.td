@@ -362,12 +362,18 @@ def ConvertSCFControlFlow : Pass<"aster-convert-scf-control-flow"> {
   let description = [{
     Converts scf.for and scf.if to cf dialect operations with explicit basic
     block structure. Handles both integer and index induction variable types.
-    Does not check for thread uniformity.
+    Uniform scf.if conditions lower to plain cf.cond_br. Divergent scf.if
+    conditions are bracketed with aster_utils.get_cf_mask /
+    aster_utils.set_cf_mask to save and restore the hardware EXEC register
+    around each branch. Divergent scf.if with SSA results are rejected with
+    an error.
   }];
   let dependentDialects = [
     "mlir::arith::ArithDialect",
     "mlir::cf::ControlFlowDialect",
-    "mlir::scf::SCFDialect"
+    "mlir::scf::SCFDialect",
+    "mlir::aster::aster_utils::AsterUtilsDialect",
+    "mlir::aster::amdgcn::AMDGCNDialect"
   ];
 }
 

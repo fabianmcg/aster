@@ -15,6 +15,7 @@
 #include "aster/CodeGen/CodeGen.h"
 #include "aster/Dialect/AMDGCN/CodeGen/CodeGen.h"
 #include "aster/Dialect/AMDGCN/IR/AMDGCNOps.h"
+#include "aster/Dialect/AMDGCN/IR/AMDGCNTypes.h"
 #include "aster/Dialect/AMDGCN/IR/Utils.h"
 #include "aster/Dialect/AsterUtils/IR/AsterUtilsOps.h"
 #include "aster/Dialect/LSIR/IR/LSIRDialect.h"
@@ -79,6 +80,28 @@ struct GetLDSOffsetOpPattern : public OpCodeGenPattern<amdgcn::GetLDSOffsetOp> {
   using OpCodeGenPattern::OpCodeGenPattern;
   LogicalResult
   matchAndRewrite(amdgcn::GetLDSOffsetOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override;
+};
+
+//===----------------------------------------------------------------------===//
+// GetCfMaskCodeGenPattern
+//===----------------------------------------------------------------------===//
+struct GetCfMaskCodeGenPattern
+    : public OpCodeGenPattern<aster_utils::GetCfMaskOp> {
+  using OpCodeGenPattern::OpCodeGenPattern;
+  LogicalResult
+  matchAndRewrite(aster_utils::GetCfMaskOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override;
+};
+
+//===----------------------------------------------------------------------===//
+// SetCfMaskCodeGenPattern
+//===----------------------------------------------------------------------===//
+struct SetCfMaskCodeGenPattern
+    : public OpCodeGenPattern<aster_utils::SetCfMaskOp> {
+  using OpCodeGenPattern::OpCodeGenPattern;
+  LogicalResult
+  matchAndRewrite(aster_utils::SetCfMaskOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override;
 };
 } // namespace
@@ -202,18 +225,25 @@ static LogicalResult createGlobalStore(OpBuilder &rewriter, Location loc,
                                        Value data, Value addr,
                                        int64_t numWords) {
   Value cOff = getI32Constant(rewriter, loc, 0);
+  Value dOff = nullptr;
+  if (isSGPR(addr.getType(), 0))
+    dOff = lsir::MovOp::create(
+               rewriter, loc,
+               createAllocation(rewriter, loc, getVGPR(rewriter.getContext())),
+               cOff)
+               .getDstRes();
   switch (numWords) {
   case 1:
-    GlobalStoreDword::create(rewriter, loc, data, addr, nullptr, cOff);
+    GlobalStoreDword::create(rewriter, loc, data, addr, dOff, cOff);
     return success();
   case 2:
-    GlobalStoreDwordx2::create(rewriter, loc, data, addr, nullptr, cOff);
+    GlobalStoreDwordx2::create(rewriter, loc, data, addr, dOff, cOff);
     return success();
   case 3:
-    GlobalStoreDwordx3::create(rewriter, loc, data, addr, nullptr, cOff);
+    GlobalStoreDwordx3::create(rewriter, loc, data, addr, dOff, cOff);
     return success();
   case 4:
-    GlobalStoreDwordx4::create(rewriter, loc, data, addr, nullptr, cOff);
+    GlobalStoreDwordx4::create(rewriter, loc, data, addr, dOff, cOff);
     return success();
   default:
     return failure();
@@ -258,6 +288,23 @@ PtrStoreOpPattern::matchAndRewrite(ptr::StoreOp op, OpAdaptor adaptor,
   int64_t numWords = (converter.getTypeSize(op.getValue().getType()) + 3) / 4;
   Value addr = adaptor.getPtr();
   auto ptrType = cast<ptr::PtrType>(op.getPtr().getType());
+
+  if (data.getType().isIntOrIndexOrFloat()) {
+    data =
+        lsir::MovOp::create(rewriter, op.getLoc(),
+                            createAllocation(rewriter, op.getLoc(),
+                                             getVGPR(rewriter.getContext(), 1)),
+                            data)
+            .getDstRes();
+  } else if (auto sgprTy = dyn_cast<SGPRType>(data.getType())) {
+    data = lsir::CopyOp::create(
+               rewriter, op.getLoc(),
+               createAllocation(
+                   rewriter, op.getLoc(),
+                   getVGPR(rewriter.getContext(), sgprTy.getRange().size())),
+               data)
+               .getTargetRes();
+  }
 
   LogicalResult created =
       isLocalMemory(ptrType)
@@ -411,6 +458,83 @@ PtrAddOpPattern::matchAndRewrite(ptr::PtrAddOp op, OpAdaptor adaptor,
 }
 
 //===----------------------------------------------------------------------===//
+// GetCfMaskCodeGenPattern
+//===----------------------------------------------------------------------===//
+
+LogicalResult GetCfMaskCodeGenPattern::matchAndRewrite(
+    aster_utils::GetCfMaskOp op, OpAdaptor adaptor,
+    ConversionPatternRewriter &rewriter) const {
+  Location loc = op.getLoc();
+  MLIRContext *ctx = rewriter.getContext();
+  // wave32 -> 1 SGPR (i32); wave64 -> 2 SGPRs (i64).
+  int16_t words = isWave32(op) ? 1 : 2;
+  // EXEC is a composite register; createAllocation handles its split/join.
+  RegisterTypeInterface execType =
+      isWave32(op) ? RegisterTypeInterface(EXECLoType::get(ctx, Register(0)))
+                   : RegisterTypeInterface(EXECType::get(ctx, Register(0)));
+  Value exec = createAllocation(rewriter, loc, execType);
+  Value sgprDst = createAlloca(rewriter, loc, getSGPR(ctx, words));
+  Value sgprMask =
+      lsir::CopyOp::create(rewriter, loc, sgprDst, exec).getTargetRes();
+  // lsir.from_reg is consumed by FromToRegOpPattern in the same codegen pass.
+  rewriter.replaceOpWithNewOp<lsir::FromRegOp>(op, op.getMask().getType(),
+                                               sgprMask);
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// SetCfMaskCodeGenPattern
+//===----------------------------------------------------------------------===//
+
+LogicalResult SetCfMaskCodeGenPattern::matchAndRewrite(
+    aster_utils::SetCfMaskOp op, OpAdaptor adaptor,
+    ConversionPatternRewriter &rewriter) const {
+  Location loc = op.getLoc();
+  MLIRContext *ctx = rewriter.getContext();
+  bool wave32 = isWave32(op);
+  int16_t words = wave32 ? 1 : 2;
+  // EXEC is a composite register; createAllocation handles its split/join.
+  RegisterTypeInterface execType =
+      wave32 ? RegisterTypeInterface(EXECLoType::get(ctx, Register(0)))
+             : RegisterTypeInterface(EXECType::get(ctx, Register(0)));
+
+  Value condVal = adaptor.getCondition();
+  if (!condVal) {
+    // Case 1: no condition — EXEC = saved.
+    // lsir.to_reg is consumed by FromToRegOpPattern in the same codegen pass.
+    Value sgprMask = lsir::ToRegOp::create(rewriter, loc, getSGPR(ctx, words),
+                                           adaptor.getMask())
+                         .getResult();
+    Value exec = createAllocation(rewriter, loc, execType);
+    lsir::CopyOp::create(rewriter, loc, exec, sgprMask);
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+  // Cases 2 and 3: EXEC = saved & cond  or  EXEC = saved & ~cond.
+  // condVal is already converted to the lane-mask type (VCC / VCC_LO) by the
+  // type converter for divergent i1 values.
+  Value sgprMask = lsir::ToRegOp::create(rewriter, loc, getSGPR(ctx, words),
+                                         adaptor.getMask())
+                       .getResult();
+  Value execDst = createAllocation(rewriter, loc, execType);
+  Value sccDst = AllocaOp::create(rewriter, loc, SCCType::get(ctx, Register()));
+  if (wave32) {
+    if (op.getComplement())
+      SAndn2B32::create(rewriter, loc, execDst, sccDst, sgprMask, condVal);
+    else
+      SAndB32::create(rewriter, loc, execDst, sccDst, sgprMask, condVal);
+  } else {
+    if (op.getComplement())
+      SAndn2B64::create(rewriter, loc, execDst, sccDst, sgprMask, condVal);
+    else
+      SAndB64::create(rewriter, loc, execDst, sccDst, sgprMask, condVal);
+  }
+  rewriter.eraseOp(op);
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // API
 //===----------------------------------------------------------------------===//
 
@@ -460,6 +584,7 @@ void mlir::aster::amdgcn::populateCodeGenPatterns(CodeGenConverter &converter,
   target.addIllegalOp<aster_utils::ThreadIdOp, aster_utils::BlockIdOp,
                       aster_utils::BlockDimOp, aster_utils::GridDimOp,
                       aster_utils::AssumeRangeOp, aster_utils::AssumeUniformOp,
+                      aster_utils::GetCfMaskOp, aster_utils::SetCfMaskOp,
                       lsir::FromRegOp, lsir::ToRegOp, lsir::RegConstraintOp,
                       ptr::LoadOp, ptr::StoreOp, ptr::PtrAddOp>();
 
@@ -469,5 +594,6 @@ void mlir::aster::amdgcn::populateCodeGenPatterns(CodeGenConverter &converter,
                IDDimOpPattern<aster_utils::BlockDimOp, amdgcn::BlockDimOp>,
                IDDimOpPattern<aster_utils::GridDimOp, amdgcn::GridDimOp>,
                PtrLoadOpPattern, PtrStoreOpPattern, PtrAddOpPattern,
-               GetLDSOffsetOpPattern>(converter);
+               GetLDSOffsetOpPattern, GetCfMaskCodeGenPattern,
+               SetCfMaskCodeGenPattern>(converter);
 }

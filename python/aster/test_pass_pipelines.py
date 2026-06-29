@@ -14,6 +14,8 @@ from aster.pass_pipelines import (
     builtin_module,
     amdgcn_module,
     amdgcn_kernel,
+    PipelineConfig,
+    make_default_pass_pipeline,
     PHASE_PRE_SCHEDULING_CLEANUP,
     PHASE_SCHEDULING,
     PHASE_POST_SCHEDULING_CLEANUP,
@@ -27,6 +29,9 @@ from aster.pass_pipelines import (
     phase_scf_pipelining,
     phase_nop_insertion,
 )
+
+# Production pipeline with default options.
+DEFAULT_PASS_PIPELINE = make_default_pass_pipeline(PipelineConfig())
 
 # --------------------------------------------------------------------------- #
 # Empty and minimal pipelines

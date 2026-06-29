@@ -83,8 +83,10 @@ amdgcn.module @kernel_with_ptr target = <gfx940> {
 // Thread X only: no masking needed (v0 used directly since Y/Z not present).
 // CHECK-LABEL: kernel @thread_block_x arguments <[#amdgcn.by_val_arg<size = 4, alignment = 4, type = i32>]> {
 // CHECK-DAG:     %[[V0:.*]] = alloca : !amdgcn.vgpr<0>
+// CHECK-DAG:     %[[V1:.*]] = alloca : !amdgcn.vgpr
 // CHECK-DAG:     %[[BID:.*]] = alloca : !amdgcn.sgpr<2>
-// CHECK:         test_inst ins %[[V0]], %[[BID]] : (!amdgcn.vgpr<0>, !amdgcn.sgpr<2>) -> ()
+// CHECK-DAG:     %[[V2:.*]] = lsir.copy %[[V1]], %[[V0]]
+// CHECK:         test_inst ins %[[V2]], %[[BID]] : (!amdgcn.vgpr, !amdgcn.sgpr<2>) -> ()
 // CHECK:         end_kernel
 // CHECK:       }
   kernel @thread_block_x arguments <[#amdgcn.by_val_arg<size = 4, alignment = 4, type = i32>]> {
@@ -104,10 +106,11 @@ amdgcn.module @kernel_with_ptr target = <gfx940> {
 // CHECK-DAG:     %[[BID_X:.*]] = alloca : !amdgcn.sgpr<2>
 // CHECK-DAG:     %[[BID_Y:.*]] = alloca : !amdgcn.sgpr<3>
 // CHECK-DAG:     %[[BID_Z:.*]] = alloca : !amdgcn.sgpr<4>
-// CHECK:         %[[TID_X:.*]] = v_and_b32 outs(%{{.*}}) ins(%[[MASK]], %[[V0]]) : outs(!amdgcn.vgpr) ins(i32, !amdgcn.vgpr<0>)
-// CHECK:         %[[SHIFTED_Y:.*]] = v_lshrrev_b32 outs(%{{.*}}) ins(%[[C10]], %[[V0]]) : outs(!amdgcn.vgpr) ins(i32, !amdgcn.vgpr<0>)
+// CHECK-DAG:     %[[TID:.*]] = lsir.copy %{{.*}}, %[[V0]]
+// CHECK:         %[[TID_X:.*]] = v_and_b32 outs(%{{.*}}) ins(%[[MASK]], %[[TID]]) : outs(!amdgcn.vgpr) ins(i32, !amdgcn.vgpr)
+// CHECK:         %[[SHIFTED_Y:.*]] = v_lshrrev_b32 outs(%{{.*}}) ins(%[[C10]], %[[TID]]) : outs(!amdgcn.vgpr) ins(i32, !amdgcn.vgpr)
 // CHECK:         %[[TID_Y:.*]] = v_and_b32 outs(%{{.*}}) ins(%[[MASK]], %[[SHIFTED_Y]]) : outs(!amdgcn.vgpr) ins(i32, !amdgcn.vgpr)
-// CHECK:         %[[TID_Z:.*]] = v_lshrrev_b32 outs(%{{.*}}) ins(%[[C20]], %[[V0]]) : outs(!amdgcn.vgpr) ins(i32, !amdgcn.vgpr<0>)
+// CHECK:         %[[TID_Z:.*]] = v_lshrrev_b32 outs(%{{.*}}) ins(%[[C20]], %[[TID]]) : outs(!amdgcn.vgpr) ins(i32, !amdgcn.vgpr)
 // CHECK:         test_inst ins %[[TID_X]], %[[TID_Y]], %[[TID_Z]], %[[BID_X]], %[[BID_Y]], %[[BID_Z]]
 // CHECK:         end_kernel
 // CHECK:       }

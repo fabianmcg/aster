@@ -377,3 +377,251 @@ func.func @test_if_with_results_inside_for(%cond: i1, %init: i32) {
   amdgcn.test_inst ins %reg : (!amdgcn.sgpr) -> ()
   return
 }
+
+// -----
+
+// Test: uniform scf.while — no mask ops should be emitted.
+// CHECK-LABEL:   func.func @test_uniform_while(
+// CHECK-SAME:      %[[N:.*]]: i32) {
+// CHECK-NOT:       aster_utils.get_cf_mask
+// CHECK-NOT:       aster_utils.set_cf_mask
+// CHECK-DAG:       %[[C0:.*]] = arith.constant 0 : i32
+// CHECK-DAG:       %[[C1:.*]] = arith.constant 1 : i32
+// CHECK:           %[[N_U:.*]] = aster_utils.assume_uniform %[[N]] : i32
+// CHECK:           cf.br ^[[BB_BEFORE:.*]](%[[C0]] : i32)
+// CHECK:         ^[[BB_BEFORE]](%[[B0:.*]]: i32):
+// CHECK:           %[[CMP:.*]] = arith.cmpi slt, %[[B0]], %[[N_U]] : i32
+// CHECK:           cf.cond_br %[[CMP]], ^[[BB_AFTER:.*]](%[[B0]] : i32), ^[[BB_END:.*]](%[[B0]] : i32)
+// CHECK:         ^[[BB_AFTER]](%[[A0:.*]]: i32):
+// CHECK:           %[[REG:.*]] = lsir.to_reg %[[A0]] : i32 -> !amdgcn.sgpr
+// CHECK:           amdgcn.test_inst ins %[[REG]] : (!amdgcn.sgpr) -> ()
+// CHECK:           %[[NEXT:.*]] = arith.addi %[[A0]], %[[C1]] : i32
+// CHECK:           cf.br ^[[BB_BEFORE]](%[[NEXT]] : i32)
+// CHECK:         ^[[BB_END]](%[[RES:.*]]: i32):
+// CHECK:           %[[OUT:.*]] = lsir.to_reg %[[RES]] : i32 -> !amdgcn.sgpr
+// CHECK:           amdgcn.test_inst ins %[[OUT]] : (!amdgcn.sgpr) -> ()
+// CHECK:           return
+// CHECK:         }
+func.func @test_uniform_while(%n: i32) {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %n_u = aster_utils.assume_uniform %n : i32
+  %result = scf.while (%i = %c0) : (i32) -> i32 {
+    %cmp = arith.cmpi slt, %i, %n_u : i32
+    scf.condition(%cmp) %i : i32
+  } do {
+  ^bb0(%a: i32):
+    %reg = lsir.to_reg %a : i32 -> !amdgcn.sgpr
+    amdgcn.test_inst ins %reg : (!amdgcn.sgpr) -> ()
+    %next = arith.addi %a, %c1 : i32
+    scf.yield %next : i32
+  }
+  %out = lsir.to_reg %result : i32 -> !amdgcn.sgpr
+  amdgcn.test_inst ins %out : (!amdgcn.sgpr) -> ()
+  return
+}
+
+// -----
+
+// Test: divergent scf.while with one loop-carried value — mask save/restore
+// must be emitted.
+// CHECK-LABEL:   func.func @test_divergent_while_single_iter_arg(
+// CHECK-SAME:      %[[INIT:.*]]: i32) {
+// CHECK:           %[[SAVED:.*]] = aster_utils.get_cf_mask : i64
+// CHECK:           cf.br ^[[BB_BEFORE:.*]](%[[INIT]] : i32)
+// CHECK:         ^[[BB_BEFORE]](%[[B0:.*]]: i32):
+// CHECK-NEXT:      aster_utils.set_cf_mask %[[SAVED]] : i64
+// CHECK:           %[[TID:.*]] = aster_utils.thread_id x
+// CHECK:           %[[CMP:.*]] = arith.cmpi slt, %[[TID]], %[[B0]] : i32
+// CHECK-NEXT:      aster_utils.set_cf_mask %[[SAVED]], %[[CMP]] : i64
+// CHECK:           cf.cond_br %[[CMP]], ^[[BB_AFTER:.*]](%[[B0]] : i32), ^[[BB_END:.*]](%[[B0]] : i32)
+// CHECK:         ^[[BB_AFTER]](%[[A0:.*]]: i32):
+// CHECK:           %[[REG:.*]] = lsir.to_reg %[[A0]] : i32 -> !amdgcn.sgpr
+// CHECK:           amdgcn.test_inst ins %[[REG]] : (!amdgcn.sgpr) -> ()
+// CHECK:           cf.br ^[[BB_BEFORE]](%[[A0]] : i32)
+// CHECK:         ^[[BB_END]](%[[RES:.*]]: i32):
+// CHECK-NEXT:      aster_utils.set_cf_mask %[[SAVED]] : i64
+// CHECK:           %[[OUT:.*]] = lsir.to_reg %[[RES]] : i32 -> !amdgcn.sgpr
+// CHECK:           amdgcn.test_inst ins %[[OUT]] : (!amdgcn.sgpr) -> ()
+// CHECK:           return
+// CHECK:         }
+func.func @test_divergent_while_single_iter_arg(%init: i32) {
+  %result = scf.while (%val = %init) : (i32) -> i32 {
+    %tid = aster_utils.thread_id x
+    %cmp = arith.cmpi slt, %tid, %val : i32
+    scf.condition(%cmp) %val : i32
+  } do {
+  ^bb0(%a: i32):
+    %reg = lsir.to_reg %a : i32 -> !amdgcn.sgpr
+    amdgcn.test_inst ins %reg : (!amdgcn.sgpr) -> ()
+    scf.yield %a : i32
+  }
+  %out = lsir.to_reg %result : i32 -> !amdgcn.sgpr
+  amdgcn.test_inst ins %out : (!amdgcn.sgpr) -> ()
+  return
+}
+
+// -----
+
+// Test: divergent scf.while with two loop-carried values. Both must appear as
+// block arguments on the before block; only the forwarded subset appears on
+// the after block and the end block.
+// CHECK-LABEL:   func.func @test_divergent_while_iter_args(
+// CHECK-SAME:      %[[A:.*]]: i32, %[[B:.*]]: i32) {
+// CHECK:           %[[SAVED:.*]] = aster_utils.get_cf_mask : i64
+// CHECK:           cf.br ^[[BB_BEFORE:.*]](%[[A]], %[[B]] : i32, i32)
+// CHECK:         ^[[BB_BEFORE]](%[[B0:.*]]: i32, %[[B1:.*]]: i32):
+// CHECK-NEXT:      aster_utils.set_cf_mask %[[SAVED]] : i64
+// CHECK:           %[[TID:.*]] = aster_utils.thread_id x
+// CHECK:           %[[CMP:.*]] = arith.cmpi slt, %[[TID]], %[[B0]] : i32
+// CHECK-NEXT:      aster_utils.set_cf_mask %[[SAVED]], %[[CMP]] : i64
+// CHECK:           cf.cond_br %[[CMP]], ^[[BB_AFTER:.*]](%[[B1]] : i32), ^[[BB_END:.*]](%[[B1]] : i32)
+// CHECK:         ^[[BB_AFTER]](%[[A0:.*]]: i32):
+// CHECK:           %[[REG:.*]] = lsir.to_reg %[[A0]] : i32 -> !amdgcn.sgpr
+// CHECK:           amdgcn.test_inst ins %[[REG]] : (!amdgcn.sgpr) -> ()
+// CHECK:           cf.br ^[[BB_BEFORE]](%[[A0]], %[[A0]] : i32, i32)
+// CHECK:         ^[[BB_END]](%[[RES:.*]]: i32):
+// CHECK-NEXT:      aster_utils.set_cf_mask %[[SAVED]] : i64
+// CHECK:           %[[OUT:.*]] = lsir.to_reg %[[RES]] : i32 -> !amdgcn.sgpr
+// CHECK:           amdgcn.test_inst ins %[[OUT]] : (!amdgcn.sgpr) -> ()
+// CHECK:           return
+// CHECK:         }
+func.func @test_divergent_while_iter_args(%a: i32, %b: i32) {
+  // The before region has two args (%x, %y); only %y is forwarded as the
+  // result. The after region uses %acc (= %y) and yields (%acc, %acc) so
+  // both next before-args are derived solely from the after-region argument.
+  %result = scf.while (%x = %a, %y = %b) : (i32, i32) -> i32 {
+    %tid = aster_utils.thread_id x
+    %cmp = arith.cmpi slt, %tid, %x : i32
+    scf.condition(%cmp) %y : i32
+  } do {
+  ^bb0(%acc: i32):
+    %reg = lsir.to_reg %acc : i32 -> !amdgcn.sgpr
+    amdgcn.test_inst ins %reg : (!amdgcn.sgpr) -> ()
+    scf.yield %acc, %acc : i32, i32
+  }
+  %out = lsir.to_reg %result : i32 -> !amdgcn.sgpr
+  amdgcn.test_inst ins %out : (!amdgcn.sgpr) -> ()
+  return
+}
+
+// -----
+
+// Test: divergent scf.while where the condition may be false on the first
+// iteration. The false edge of cf.cond_br must target the end block with the
+// forwarded values, confirming the exit-on-first-check path is structurally
+// identical to the general divergent case.
+// CHECK-LABEL:   func.func @test_divergent_while_first_iter_exit(
+// CHECK-SAME:      %[[INIT:.*]]: i32) {
+// CHECK:           %[[SAVED:.*]] = aster_utils.get_cf_mask : i64
+// CHECK:           cf.br ^[[BB_BEFORE:.*]](%[[INIT]] : i32)
+// CHECK:         ^[[BB_BEFORE]](%[[B0:.*]]: i32):
+// CHECK-NEXT:      aster_utils.set_cf_mask %[[SAVED]] : i64
+// CHECK:           %[[TID:.*]] = aster_utils.thread_id x
+// CHECK:           %[[CMP:.*]] = arith.cmpi slt, %[[TID]], %[[B0]] : i32
+// CHECK-NEXT:      aster_utils.set_cf_mask %[[SAVED]], %[[CMP]] : i64
+// CHECK:           cf.cond_br %[[CMP]], ^[[BB_AFTER:.*]](%[[B0]] : i32), ^[[BB_END:.*]](%[[B0]] : i32)
+// CHECK:         ^[[BB_AFTER]](%[[A0:.*]]: i32):
+// CHECK:           cf.br ^[[BB_BEFORE]](%[[A0]] : i32)
+// CHECK:         ^[[BB_END]](%[[RES:.*]]: i32):
+// CHECK-NEXT:      aster_utils.set_cf_mask %[[SAVED]] : i64
+// CHECK:           return
+// CHECK:         }
+func.func @test_divergent_while_first_iter_exit(%init: i32) {
+  // The condition can be false immediately, exercising the exit edge without
+  // ever entering the after region.
+  %result = scf.while (%val = %init) : (i32) -> i32 {
+    %tid = aster_utils.thread_id x
+    %cmp = arith.cmpi slt, %tid, %val : i32
+    scf.condition(%cmp) %val : i32
+  } do {
+  ^bb0(%a: i32):
+    scf.yield %a : i32
+  }
+  return
+}
+
+// -----
+
+// Divergent scf.for: lower bound is thread_id, so threads enter/exit at
+// different iterations. EXEC is saved before the loop and the active-lane
+// condition is passed as a block argument into bbBody so the mask is narrowed
+// only at the top of each iteration body and restored once after the loop.
+// No set_cf_mask is emitted before the initial branch.
+// CHECK-LABEL: kernel @k_divergent_for
+// CHECK:         %[[SAVED:.*]] = aster_utils.get_cf_mask : i64
+// CHECK:         %[[INIT_CMP:.*]] = arith.cmpi slt, %[[TID:.*]], %{{.*}} : i32
+// CHECK-NEXT:    cf.cond_br %[[INIT_CMP]], ^[[BB_BODY:bb[0-9]+]](%[[TID]], %[[INIT_CMP]] : i32, i1), ^[[BB_END:bb[0-9]+]]
+// CHECK:       ^[[BB_BODY]](%[[IV:.*]]: i32, %[[COND:.*]]: i1):
+// CHECK-NEXT:    aster_utils.set_cf_mask %[[SAVED]], %[[COND]] : i64
+// CHECK-NEXT:    %[[REG:.*]] = lsir.to_reg %[[IV]] : i32 -> !amdgcn.sgpr
+// CHECK-NEXT:    test_inst ins %[[REG]] : (!amdgcn.sgpr) -> ()
+// CHECK-NEXT:    %[[IV_NEXT:.*]] = arith.addi %[[IV]], %{{.*}} : i32
+// CHECK-NEXT:    %[[BACK_CMP:.*]] = arith.cmpi slt, %[[IV_NEXT]], %{{.*}} : i32
+// CHECK-NEXT:    cf.cond_br %[[BACK_CMP]], ^[[BB_BODY]](%[[IV_NEXT]], %[[BACK_CMP]] : i32, i1), ^[[BB_END]]
+// CHECK:       ^[[BB_END]]:
+// CHECK-NEXT:    aster_utils.set_cf_mask %[[SAVED]] : i64
+amdgcn.module @m target = <gfx942> {
+  amdgcn.kernel @k_divergent_for {
+    %tid = aster_utils.thread_id x
+    %c1 = arith.constant 1 : i32
+    %c10 = arith.constant 10 : i32
+    scf.for %i = %tid to %c10 step %c1 : i32 {
+      %reg = lsir.to_reg %i : i32 -> !amdgcn.sgpr
+      amdgcn.test_inst ins %reg : (!amdgcn.sgpr) -> ()
+    }
+    end_kernel
+  }
+}
+
+// -----
+
+// Uniform scf.for inside a kernel: no mask ops despite a wave target present.
+// CHECK-LABEL: kernel @k_uniform_for
+// CHECK-NOT:     aster_utils.get_cf_mask
+// CHECK-NOT:     aster_utils.set_cf_mask
+amdgcn.module @m target = <gfx942> {
+  amdgcn.kernel @k_uniform_for {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c10 = arith.constant 10 : i32
+    scf.for %i = %c0 to %c10 step %c1 : i32 {
+      %reg = lsir.to_reg %i : i32 -> !amdgcn.sgpr
+      amdgcn.test_inst ins %reg : (!amdgcn.sgpr) -> ()
+    }
+    end_kernel
+  }
+}
+
+// -----
+
+// Divergent scf.for with one iter_arg: the active-lane condition is a bbarg
+// alongside iv and the iter_arg; mask narrowing happens only at the top of
+// each body iteration; the mask is restored once after the loop.
+// CHECK-LABEL: kernel @k_divergent_for_iter_args
+// CHECK:         %[[SAVED:.*]] = aster_utils.get_cf_mask : i64
+// CHECK:         %[[INIT_CMP:.*]] = arith.cmpi slt, %[[TID:.*]], %{{.*}} : i32
+// CHECK-NEXT:    cf.cond_br %[[INIT_CMP]], ^[[BB_BODY:bb[0-9]+]](%[[TID]], %[[INIT_CMP]], %{{.*}} : i32, i1, i32), ^[[BB_END:bb[0-9]+]](%{{.*}} : i32)
+// CHECK:       ^[[BB_BODY]](%[[IV:.*]]: i32, %[[COND:.*]]: i1, %[[ACC:.*]]: i32):
+// CHECK-NEXT:    aster_utils.set_cf_mask %[[SAVED]], %[[COND]] : i64
+// CHECK-NEXT:    %[[SUM:.*]] = arith.addi %[[ACC]], %[[IV]] : i32
+// CHECK-NEXT:    %[[IV_NEXT:.*]] = arith.addi %[[IV]], %{{.*}} : i32
+// CHECK-NEXT:    %[[BACK_CMP:.*]] = arith.cmpi slt, %[[IV_NEXT]], %{{.*}} : i32
+// CHECK-NEXT:    cf.cond_br %[[BACK_CMP]], ^[[BB_BODY]](%[[IV_NEXT]], %[[BACK_CMP]], %[[SUM]] : i32, i1, i32), ^[[BB_END]](%[[SUM]] : i32)
+// CHECK:       ^[[BB_END]](%[[RESULT:.*]]: i32):
+// CHECK-NEXT:    aster_utils.set_cf_mask %[[SAVED]] : i64
+amdgcn.module @m target = <gfx942> {
+  amdgcn.kernel @k_divergent_for_iter_args {
+    %tid = aster_utils.thread_id x
+    %c1 = arith.constant 1 : i32
+    %c10 = arith.constant 10 : i32
+    %c0 = arith.constant 0 : i32
+    %result = scf.for %i = %tid to %c10 step %c1 iter_args(%acc = %c0) -> i32 : i32 {
+      %sum = arith.addi %acc, %i : i32
+      scf.yield %sum : i32
+    }
+    %reg = lsir.to_reg %result : i32 -> !amdgcn.sgpr
+    amdgcn.test_inst ins %reg : (!amdgcn.sgpr) -> ()
+    end_kernel
+  }
+}

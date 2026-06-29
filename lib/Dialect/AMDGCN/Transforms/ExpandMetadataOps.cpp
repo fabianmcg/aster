@@ -554,6 +554,13 @@ static void handleThreadId(RewriterBase &rewriter, KernelOp op,
   // Packed path: all thread IDs come from VGPR0.
   Value packedV0 = createAllocation(
       rewriter, op.getLoc(), VGPRType::get(rewriter.getContext(), Register(0)));
+  packedV0 =
+      lsir::CopyOp::create(
+          rewriter, op.getLoc(),
+          createAllocation(rewriter, op.getLoc(),
+                           VGPRType::get(rewriter.getContext(), Register())),
+          packedV0)
+          .getTargetRes();
 
   // Determine if we need to mask X (only needed when Y or Z are also used,
   // since the upper bits of v0 would contain Y/Z data).

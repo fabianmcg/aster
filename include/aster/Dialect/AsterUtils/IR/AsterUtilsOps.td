@@ -376,4 +376,60 @@ def AsterUtils_MuliOp : AsterUtils_Op<"muli", [
   let hasVerifier = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// GetCfMaskOp
+//===----------------------------------------------------------------------===//
+
+def AsterUtils_GetCfMaskOp : AsterUtils_Op<"get_cf_mask", []> {
+  let summary = "Read the current control-flow (EXEC) mask";
+  let description = [{
+    The `aster_utils.get_cf_mask` operation reads the active-lane mask (the
+    hardware EXEC register) and returns it as an integer. The result is `i32`
+    on wave32 targets and `i64` on wave64 targets.
+
+    Example:
+    ```mlir
+    %mask = aster_utils.get_cf_mask : i64
+    ```
+  }];
+  let arguments = (ins);
+  let results = (outs AnyTypeOf<[I32, I64]>:$mask);
+  let assemblyFormat = "attr-dict `:` type($mask)";
+}
+
+//===----------------------------------------------------------------------===//
+// SetCfMaskOp
+//===----------------------------------------------------------------------===//
+
+def AsterUtils_SetCfMaskOp : AsterUtils_Op<"set_cf_mask", []> {
+  let summary = "Write the control-flow (EXEC) mask";
+  let description = [{
+    The `aster_utils.set_cf_mask` operation writes an integer value into the
+    active-lane mask (the hardware EXEC register). The operand is `i32` on
+    wave32 targets and `i64` on wave64 targets.
+
+    Three forms are supported:
+    - `set_cf_mask %mask` — EXEC = mask
+    - `set_cf_mask %mask, %cond` — EXEC = mask & cond
+    - `set_cf_mask %mask, %cond {complement}` — EXEC = mask & ~cond
+
+    Example:
+    ```mlir
+    aster_utils.set_cf_mask %mask : i64
+    aster_utils.set_cf_mask %mask, %cond : i64
+    aster_utils.set_cf_mask %mask, %cond {complement} : i64
+    ```
+  }];
+  let arguments = (ins
+    AnyTypeOf<[I32, I64]>:$mask,
+    Optional<I1>:$condition,
+    UnitAttr:$complement
+  );
+  let results = (outs);
+  let assemblyFormat = [{
+    $mask (`,` $condition^)? (`{` `complement` `}` $complement^)? attr-dict `:` type($mask)
+  }];
+  let hasVerifier = 1;
+}
+
 #endif // ASTER_DIALECT_ASTERUTILS_IR_ASTERUTILSOPS_TD

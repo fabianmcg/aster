@@ -19,6 +19,7 @@
 #include "aster/Dialect/AMDGCN/IR/Interfaces/AMDGCNRegisterTypeInterface.h"
 #include "aster/Dialect/AMDGCN/IR/Utils.h"
 #include "aster/Dialect/AMDGCN/Transforms/Passes.h"
+#include "aster/Dialect/AsterUtils/IR/AsterUtilsOps.h"
 #include "aster/Dialect/LSIR/IR/LSIROps.h"
 #include "aster/IR/ValueOrConst.h"
 #include "aster/Interfaces/GPUFuncInterface.h"

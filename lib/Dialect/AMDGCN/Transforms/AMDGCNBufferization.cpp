@@ -718,6 +718,10 @@ static LogicalResult runOnFunction(FunctionOpInterface op,
   BufferizationImpl impl(allocator, domInfo, *dpsResult, *livenessResult);
   impl.run(rewriter, op);
 
+  // BufferizationImpl inserts new phi-forward blocks, so the dominator tree
+  // must be invalidated before SRegBufferization uses it.
+  domInfo.invalidate(&op.getFunctionBody());
+
   // Promote special register values that are clobbered by later definitions.
   SRegBufferization sregImpl(rewriter, allocator, domInfo);
   if (failed(sregImpl.run(op)))

@@ -455,6 +455,17 @@ LogicalResult MuliOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// SetCfMaskOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult SetCfMaskOp::verify() {
+  // complement requires condition to be present.
+  if (getComplement() && !getCondition())
+    return emitOpError("complement requires condition operand to be present");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // IncGen
 //===----------------------------------------------------------------------===//
 

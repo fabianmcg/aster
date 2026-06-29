@@ -27,3 +27,13 @@ func.func @muli_one_operand(%a: index) -> index {
   %0 = aster_utils.muli %a : index
   return %0 : index
 }
+
+// -----
+
+// Complement without condition must be rejected by the verifier.
+func.func @set_cf_mask_complement_no_cond() {
+  %m = arith.constant 0 : i64
+  // expected-error @+1 {{complement requires condition operand to be present}}
+  aster_utils.set_cf_mask %m{complement} : i64
+  return
+}

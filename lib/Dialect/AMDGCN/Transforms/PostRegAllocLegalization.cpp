@@ -112,6 +112,30 @@ CopyExpansionPattern::matchAndRewrite(lsir::CopyOp op,
   if (!srcTy || !tgtTy)
     return failure();
 
+  // Copy involving EXEC (64-bit) needs s_mov_b64; EXEC_LO (32-bit) needs
+  // s_mov_b32, mirroring the VCC / VCC_LO split below.
+  if (isa<EXECLoType>(srcTy) || isa<EXECLoType>(tgtTy)) {
+    assert((isa<EXECLoType>(srcTy) ||
+            srcTy.getRegisterKind() == RegisterKind::SGPR) &&
+           (isa<EXECLoType>(tgtTy) ||
+            tgtTy.getRegisterKind() == RegisterKind::SGPR) &&
+           "exec_lo copy: the other side must be SGPR-class (s_mov_b32)");
+    SMovB32::create(rewriter, op.getLoc(), op.getTarget(), op.getSource());
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+  if (isa<EXECType>(srcTy) || isa<EXECType>(tgtTy)) {
+    assert((isa<EXECType>(srcTy) ||
+            srcTy.getRegisterKind() == RegisterKind::SGPR) &&
+           (isa<EXECType>(tgtTy) ||
+            tgtTy.getRegisterKind() == RegisterKind::SGPR) &&
+           "exec copy: the other side must be SGPR-class (s_mov_b64)");
+    SMovB64::create(rewriter, op.getLoc(), op.getTarget(), op.getSource());
+    rewriter.eraseOp(op);
+    return success();
+  }
+
   // Copy involving VCC needs special 64b handling.
   if (isa<VCCType>(srcTy) || isa<VCCType>(tgtTy)) {
     assert((isa<VCCType>(srcTy) ||

@@ -79,6 +79,16 @@ void amdgcn::registerDCE(Operation *op, DataFlowSolver &solver) {
     if (failed(allocas))
       return; // Conservative: preserve operations we can't analyze.
 
+    // Writes to EXEC are never eliminated: every vector instruction implicitly
+    // reads EXEC as its lane mask, so the liveness analysis would need to model
+    // all VPU instructions as EXEC users to safely DCE these copies.
+    bool writesToExec = llvm::any_of(*allocas, [](Value alloca) {
+      Type ty = alloca.getType();
+      return isa<EXECLoType, EXECHiType, EXECType>(ty);
+    });
+    if (writesToExec)
+      return;
+
     // The operation is live if any of its target allocas are live.
     bool isLive = llvm::any_of(
         *allocas, [&](Value alloca) { return liveValues->contains(alloca); });

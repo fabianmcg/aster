@@ -15,6 +15,9 @@
 #ifndef ASTER_TRANSFORMS_PASSES_H
 #define ASTER_TRANSFORMS_PASSES_H
 
+#include "aster/Dialect/AMDGCN/IR/AMDGCNDialect.h"
+#include "aster/Dialect/AsterUtils/IR/AsterUtilsDialect.h"
+#include "aster/Dialect/LSIR/IR/LSIRDialect.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir::aster {
