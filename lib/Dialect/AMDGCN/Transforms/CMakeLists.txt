@@ -30,6 +30,7 @@ add_mlir_library(AMDGCNTransforms
   ToRegisterSemantics.cpp
   StripWaits.cpp
   WaitInsertion.cpp
+  WrapInModule.cpp
 
   DEPENDS
   AMDGCNPassesIncGen

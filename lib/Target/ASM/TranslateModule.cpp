@@ -325,9 +325,9 @@ LogicalResult TranslateModuleImpl::emitOperation(amdgcn::AsmPrinter &printer,
         return printISAInstruction(printer, module.getTargetAttr(), op);
       })
       .Case<AllocaOp, MakeRegisterRangeOp, SplitRegisterRangeOp,
-            arith::ConstantIntOp>([&](auto op) {
-        // Alloca, MakeRegisterRange and arith::ConstantInt operations are not
-        // printed, they are implied by the register or attribute usage.
+            arith::ConstantIntOp, arith::ConstantOp>([&](auto op) {
+        // Alloca, MakeRegisterRange, and arith constant operations are not
+        // printed; they are implied by the register or attribute usage.
         if (debugPrint)
           printer.getStream() << "; " << *op << "\n";
         return success();

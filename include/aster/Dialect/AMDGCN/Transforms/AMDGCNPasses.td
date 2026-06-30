@@ -271,6 +271,22 @@ def PreloadLibrary : Pass<"amdgcn-preload-library", "mlir::ModuleOp"> {
   ];
 }
 
+def WrapInModule : Pass<"amdgcn-wrap-in-module", "::mlir::ModuleOp"> {
+  let summary = "Wrap builtin.module contents in an amdgcn.module";
+  let description = [{
+    Creates an amdgcn.module with the given target and moves all ops currently
+    inside the builtin.module into it. The new amdgcn.module is inserted first,
+    and then every pre-existing op is spliced into its body.
+  }];
+  let dependentDialects = ["mlir::aster::amdgcn::AMDGCNDialect"];
+  let options = [
+    Option<"target", "target", "std::string", "\"\"",
+           "AMDGCN target name (e.g. gfx942)">,
+    Option<"moduleName", "name", "std::string", "\"module\"",
+           "Symbol name for the new amdgcn.module">,
+  ];
+}
+
 def RemoveTestInst : Pass<"amdgcn-remove-test-inst"> {
   let summary = "Remove all amdgcn.test_inst operations";
   let description = [{

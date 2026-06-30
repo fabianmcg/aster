@@ -370,6 +370,12 @@ struct StoreOpPattern : public OpRewritePattern<lsir::StoreOp> {
 // SubIOpPattern
 //===----------------------------------------------------------------------===//
 
+struct DivFOpPattern : public OpRewritePattern<lsir::DivFOp> {
+  using Base::Base;
+  LogicalResult matchAndRewrite(lsir::DivFOp op,
+                                PatternRewriter &rewriter) const override;
+};
+
 struct SubFOpPattern : public OpRewritePattern<lsir::SubFOp> {
   using Base::Base;
   LogicalResult matchAndRewrite(lsir::SubFOp op,
@@ -750,6 +756,110 @@ LogicalResult
 MinimumFOpPattern::matchAndRewrite(lsir::MinimumFOp op,
                                    PatternRewriter &rewriter) const {
   return lowerBinaryFloatOp<lsir::MinimumFOp, VMinF32, VMinF32>(op, rewriter);
+}
+
+//===----------------------------------------------------------------------===//
+// DivFOpPattern — IEEE-754 f32 division via hardware division macro.
+//
+// Implements the Newton-Raphson sequence recommended in the CDNA3/CDNA4 ISA:
+//   scaled_b, vcc = v_div_scale_f32(b, b, a)   // scale denominator
+//   rcp           = v_rcp_f32(scaled_b)          // reciprocal estimate
+//   scaled_a, _   = v_div_scale_f32(a, b, a)    // scale numerator
+//   err           = v_fma_f32(-scaled_b, rcp, 1) // Newton-Raphson error
+//   rcp2          = v_fma_f32(err, rcp, rcp)     // refine reciprocal
+//   quot          = v_mul_f32(scaled_a, rcp2)    // initial quotient
+//   resid         = v_fma_f32(-scaled_b, quot, scaled_a)
+//   quot2         = v_fma_f32(resid, rcp2, quot) // refined quotient
+//   final_res     = v_fma_f32(-scaled_b, quot2, scaled_a)
+//   quot_scaled   = v_div_fmas_f32(final_res, rcp2, quot2, vcc)
+//   result        = v_div_fixup_f32(quot_scaled, b, a)
+//===----------------------------------------------------------------------===//
+
+LogicalResult DivFOpPattern::matchAndRewrite(lsir::DivFOp op,
+                                             PatternRewriter &rewriter) const {
+  if (getOperandKind(op.getDst().getType()) != OperandKind::VGPR)
+    return rewriter.notifyMatchFailure(op, "float ops require VGPR dest");
+  if (op.getSemantics().getWidth() != 32)
+    return rewriter.notifyMatchFailure(op, "only f32 division is supported");
+
+  MLIRContext *ctx = rewriter.getContext();
+  Location loc = op.getLoc();
+  auto vgpr = [&]() { return createAllocation(rewriter, loc, getVGPR(ctx)); };
+  auto allocVCC = [&]() {
+    Type lmt = getLaneMaskType(op);
+    return createAllocation(rewriter, loc, cast<RegisterTypeInterface>(lmt));
+  };
+
+  Value a = op.getLhs(); // numerator
+  Value b = op.getRhs(); // denominator
+
+  // v_div_scale_f32: scale denominator; VCC set if post-scaling needed.
+  Value vcc_dst = allocVCC();
+  auto scale_b_op =
+      VDivScaleF32::create(rewriter, loc, vgpr(), vcc_dst, b, b, a);
+  Value scaled_b = scale_b_op.getDst0Res();
+  Value vcc = scale_b_op.getDst1Res();
+
+  // v_rcp_f32: IEEE reciprocal estimate (1ULP accuracy).
+  Value rcp = VRcpF32::create(rewriter, loc, vgpr(), scaled_b).getDst0Res();
+
+  // v_div_scale_f32: scale numerator (uses same inputs, different first arg).
+  Value vcc_a_dst = allocVCC();
+  Value scaled_a =
+      VDivScaleF32::create(rewriter, loc, vgpr(), vcc_a_dst, a, b, a)
+          .getDst0Res();
+
+  // v_fma_f32: err = fma(-scaled_b, rcp, 1.0)  [Newton-Raphson error term].
+  // Negate scaled_b via subtraction: neg_sb = 0 - scaled_b.
+  Value zero_vgpr =
+      VMovB32::create(rewriter, loc, vgpr(), getI32Constant(rewriter, loc, 0))
+          .getDst0Res();
+  Value neg_sb =
+      VSubF32::create(rewriter, loc, vgpr(), zero_vgpr, scaled_b).getDst0Res();
+  // 1.0f bit pattern = 0x3f800000.
+  Value one_vgpr = VMovB32::create(rewriter, loc, vgpr(),
+                                   getI32Constant(rewriter, loc, 0x3f800000))
+                       .getDst0Res();
+  Value err = VFmaF32::create(rewriter, loc, vgpr(), neg_sb, rcp, one_vgpr)
+                  .getDst0Res();
+
+  // v_fma_f32: rcp2 = fma(err, rcp, rcp)  [refine reciprocal].
+  Value rcp2 =
+      VFmaF32::create(rewriter, loc, vgpr(), err, rcp, rcp).getDst0Res();
+
+  // v_mul_f32: initial quotient estimate.
+  Value quot =
+      VMulF32::create(rewriter, loc, vgpr(), scaled_a, rcp2).getDst0Res();
+
+  // v_fma_f32: residual = fma(-scaled_b, quot, scaled_a).
+  Value neg_sb2 =
+      VSubF32::create(rewriter, loc, vgpr(), zero_vgpr, scaled_b).getDst0Res();
+  Value resid = VFmaF32::create(rewriter, loc, vgpr(), neg_sb2, quot, scaled_a)
+                    .getDst0Res();
+
+  // v_fma_f32: quot2 = fma(resid, rcp2, quot)  [refined quotient].
+  Value quot2 =
+      VFmaF32::create(rewriter, loc, vgpr(), resid, rcp2, quot).getDst0Res();
+
+  // v_fma_f32: final_res = fma(-scaled_b, quot2, scaled_a)  [for div_fmas].
+  Value neg_sb3 =
+      VSubF32::create(rewriter, loc, vgpr(), zero_vgpr, scaled_b).getDst0Res();
+  Value final_res =
+      VFmaF32::create(rewriter, loc, vgpr(), neg_sb3, quot2, scaled_a)
+          .getDst0Res();
+
+  // v_div_fmas_f32: apply post-scaling if VCC was set by v_div_scale_f32.
+  Value quot_scaled =
+      VDivFmasF32::create(rewriter, loc, vgpr(), final_res, rcp2, quot2, vcc)
+          .getDst0Res();
+
+  // v_div_fixup_f32: handle NaN, infinity, and divide-by-zero corner cases.
+  Value result =
+      VDivFixupF32::create(rewriter, loc, op.getDst(), quot_scaled, b, a)
+          .getDst0Res();
+
+  rewriter.replaceOp(op, result);
+  return success();
 }
 
 //===----------------------------------------------------------------------===//
@@ -2924,7 +3034,7 @@ LogicalResult RemSIOpPattern::matchAndRewrite(lsir::RemSIOp op,
 void mlir::aster::amdgcn::populateToAMDGCNPatterns(
     RewritePatternSet &patterns) {
   patterns.add< // Arithmetic ops.
-      AddFOpPattern, AddIOpPattern, AndIOpPattern, CmpIOpPattern,
+      AddFOpPattern, AddIOpPattern, AndIOpPattern, CmpIOpPattern, DivFOpPattern,
       SelectOpPattern, ExtFOpPattern, ExtSIOpPattern, ExtUIOpPattern,
       TruncFOpPattern, SIToFPOpPattern, UIToFPOpPattern, FPToSIOpPattern,
       FPToUIOpPattern, MaximumFOpPattern, MinimumFOpPattern, MulFOpPattern,

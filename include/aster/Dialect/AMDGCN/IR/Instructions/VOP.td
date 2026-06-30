@@ -1890,4 +1890,153 @@ def VMadU64U32 : AMDISAInstruction<"v_mad_u64_u32"> {
 }
 #endif // VMADU64U32_DEF
 
+#ifndef VRCPF32_DEF
+#define VRCPF32_DEF
+def VRcpF32 : VOP1Out1In1Inst<"v_rcp_f32",
+    /*dst0=*/[VGPROf<1>],
+    /*src0=*/[OneGPROrSRegOrConstOf<InlineLitFP<[F32]>, F32>,
+             OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>]
+  > {
+  let archs = [CDNA3Isa, CDNA4Isa];
+  let description = [{
+    Compute the IEEE reciprocal of the single-precision float input.
+  }];
+  let encodings = [
+    InstEnc<[ENC_VOP1_CDNA3, ENC_VOP1_CDNA4], 0b00100010, (pred
+      OneGPROrSRegOrConstOf<InlineLitFP<[F32]>, F32>:$src0
+    )>,
+    InstEnc<[ENC_VOP3_CDNA3, ENC_VOP3_CDNA4], 0b0110100010, (pred
+      OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>:$src0
+    )>
+  ];
+}
+#endif // VRCPF32_DEF
+
+#ifndef VFMAF32_DEF
+#define VFMAF32_DEF
+def VFmaF32 : AMDISAInstruction<"v_fma_f32"> {
+  let props = [IsVALU];
+  let archs = [CDNA3Isa, CDNA4Isa];
+  let description = [{
+    Multiply two single-precision float inputs and add a third input using fused
+    multiply-add, and store the result into a vector register.
+  }];
+  let encodings = [InstEnc<[ENC_VOP3_CDNA3, ENC_VOP3_CDNA4], 0b0111001011>];
+  let outputs = (ins VGPROf<1>:$dst0);
+  let inputs = (ins
+    OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>:$src0,
+    OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>:$src1,
+    OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>:$src2
+  );
+  let trailingArgs = (ins);
+  let asm_syntax = [
+    ASMString<[ENC_VOP3_CDNA3, ENC_VOP3_CDNA4],
+        "${mnemonic} $dst0, $src0, $src1, $src2">
+  ];
+}
+#endif // VFMAF32_DEF
+
+#ifndef VFMACF32_DEF
+#define VFMACF32_DEF
+def VFmacF32 : VOP2Out1In2Inst<"v_fmac_f32",
+    /*src0=*/[OneGPROrSRegOrConstOf<InlineLitFP<[F32]>, F32>,
+             OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>],
+    /*src1=*/[VGPROf<1>,
+             OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>]
+  > {
+  let archs = [CDNA3Isa, CDNA4Isa];
+  let description = [{
+    Multiply two single-precision float inputs and accumulate the result into
+    the destination register using fused multiply-add. D0 = fma(S0, S1, D0).
+  }];
+  let encodings = [
+    InstEnc<[ENC_VOP2_CDNA3, ENC_VOP2_CDNA4], 0b111011, (pred
+      OneGPROrSRegOrConstOf<InlineLitFP<[F32]>, F32>:$src0,
+      VGPROf<1>:$src1
+    )>,
+    InstEnc<[ENC_VOP3_CDNA3, ENC_VOP3_CDNA4], 0b0100111011, (pred
+      OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>:$src0,
+      OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>:$src1
+    )>
+  ];
+}
+#endif // VFMACF32_DEF
+
+#ifndef VDIVFIXUPF32_DEF
+#define VDIVFIXUPF32_DEF
+def VDivFixupF32 : AMDISAInstruction<"v_div_fixup_f32"> {
+  let props = [IsVALU];
+  let archs = [CDNA3Isa, CDNA4Isa];
+  let description = [{
+    Fix up the quotient for corner cases (NaN, infinity, divide by zero).
+    Final step of the high-precision f32 division macro.
+  }];
+  let encodings = [InstEnc<[ENC_VOP3_CDNA3, ENC_VOP3_CDNA4], 0b0111011110>];
+  let outputs = (ins VGPROf<1>:$dst0);
+  let inputs = (ins
+    OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>:$src0,
+    OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>:$src1,
+    OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>:$src2
+  );
+  let trailingArgs = (ins);
+  let asm_syntax = [
+    ASMString<[ENC_VOP3_CDNA3, ENC_VOP3_CDNA4],
+        "${mnemonic} $dst0, $src0, $src1, $src2">
+  ];
+}
+#endif // VDIVFIXUPF32_DEF
+
+#ifndef VDIVSCALEF32_DEF
+#define VDIVSCALEF32_DEF
+def VDivScaleF32 : AMDISAInstruction<"v_div_scale_f32"> {
+  let props = [IsVALU];
+  let archs = [CDNA3Isa, CDNA4Isa];
+  let description = [{
+    Scale a value for use in the Newton-Raphson f32 division macro; sets VCC
+    if post-scaling of the final quotient will be required.
+  }];
+  let encodings = [InstEnc<[ENC_VOP3_CDNA3, ENC_VOP3_CDNA4], 0b0111100000>];
+  let outputs = (ins
+    VGPROf<1>:$dst0,
+    AnyRegOf<[VCCType, TwoSGPROrVCCType]>:$dst1
+  );
+  let inputs = (ins
+    OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>:$src0,
+    OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>:$src1,
+    OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>:$src2
+  );
+  let trailingArgs = (ins);
+  let asm_syntax = [
+    ASMString<[ENC_VOP3_CDNA3, ENC_VOP3_CDNA4],
+        "${mnemonic} $dst0, $dst1, $src0, $src1, $src2">
+  ];
+}
+#endif // VDIVSCALEF32_DEF
+
+#ifndef VDIVFMASF32_DEF
+#define VDIVFMASF32_DEF
+def VDivFmasF32 : AMDISAInstruction<"v_div_fmas_f32"> {
+  let props = [IsVALU];
+  let archs = [CDNA3Isa, CDNA4Isa];
+  let description = [{
+    FMA with conditional post-scaling of the exponent when VCC is set.
+    Part of the high-precision f32 division macro; relies on v_div_scale_f32
+    to set VCC when scaling is required.
+  }];
+  let encodings = [InstEnc<[ENC_VOP3_CDNA3, ENC_VOP3_CDNA4], 0b0111100010>];
+  let outputs = (ins VGPROf<1>:$dst0);
+  let inputs = (ins
+    OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>:$src0,
+    OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>:$src1,
+    OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>:$src2,
+    AnyRegOf<[VCCType, TwoSGPROrVCCType]>:$vcc
+  );
+  let trailingArgs = (ins);
+  let asm_syntax = [
+    ASMString<[ENC_VOP3_CDNA3, ENC_VOP3_CDNA4],
+        "${mnemonic} $dst0, $src0, $src1, $src2">
+  ];
+}
+#endif // VDIVFMASF32_DEF
+
 #endif // AMDGCN_VOP_TD
