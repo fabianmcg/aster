@@ -1337,4 +1337,29 @@ def GlobalStoreB128 : GlobalStoreBInst<"global_store_b128",
 }
 #endif // GLOBALSTOREB128_DEF
 
+#ifndef GLOBALLOADUSHORT_DEF
+#define GLOBALLOADUSHORT_DEF
+def GlobalLoadUshort : GlobalLoadInst<"global_load_ushort",
+    /*dest=*/[VGPROrAGPROf<1>]
+  > {
+  let description = [{
+    Load 16 bits of unsigned data from the global aperture, zero extend to 32
+    bits and store the result into a vector register.
+  }];
+  let encodings = [InstEnc<[ENC_FLAT_GLBL_CDNA3, ENC_FLAT_GLBL_CDNA4], 0b0010010>];
+}
+#endif // GLOBALLOADUSHORT_DEF
+
+#ifndef GLOBALSTORESHORT_DEF
+#define GLOBALSTORESHORT_DEF
+def GlobalStoreShort : GlobalStoreDwordInst<"global_store_short",
+    /*data=*/[VGPROrAGPROf<1>]
+  > {
+  let description = [{
+    Store the low 16 bits of a vector register into the global aperture.
+  }];
+  let encodings = [InstEnc<[ENC_FLAT_GLBL_CDNA3, ENC_FLAT_GLBL_CDNA4], 0b0011010>];
+}
+#endif // GLOBALSTORESHORT_DEF
+
 #endif // AMDGCN_VMEM_TD

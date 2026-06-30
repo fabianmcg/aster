@@ -1979,6 +1979,15 @@ LogicalResult ExtFOpPattern::matchAndRewrite(lsir::ExtFOp op,
     if (cast<RegisterTypeInterface>(dst.getType()).getAsRange().size() != 1)
       return rewriter.notifyMatchFailure(op,
                                          "f32 dst must be a single register");
+    if (op.getSrcType().isBF16()) {
+      // bf16 → f32: shift the bf16 bits into the upper 16 bits of a 32-bit
+      // register. Bf16 and f32 share the same sign/exponent encoding.
+      Value c16 = getI32Constant(rewriter, loc, 16);
+      Value result =
+          VLshlrevB32::create(rewriter, loc, dst, c16, value).getDst0Res();
+      rewriter.replaceOp(op, result);
+      return success();
+    }
     Value result = VCvtF32F16::create(rewriter, loc, dst, value).getDst0Res();
     rewriter.replaceOp(op, result);
     return success();
@@ -2014,6 +2023,14 @@ TruncFOpPattern::matchAndRewrite(lsir::TruncFOp op,
     if (cast<RegisterTypeInterface>(dst.getType()).getAsRange().size() != 1)
       return rewriter.notifyMatchFailure(op,
                                          "f16 dst must be a single register");
+    if (op.getTgtType().isBF16()) {
+      // f32 → bf16: take the upper 16 bits (truncate toward zero, no rounding).
+      Value c16 = getI32Constant(rewriter, loc, 16);
+      Value result =
+          VLshrrevB32::create(rewriter, loc, dst, c16, value).getDst0Res();
+      rewriter.replaceOp(op, result);
+      return success();
+    }
     Value result = VCvtF16F32::create(rewriter, loc, dst, value).getDst0Res();
     rewriter.replaceOp(op, result);
     return success();

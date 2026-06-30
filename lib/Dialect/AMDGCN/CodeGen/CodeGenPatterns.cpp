@@ -178,8 +178,13 @@ static FailureOr<Value> createDSRead(OpBuilder &rewriter, Location loc,
 /// Create a GLOBAL_LOAD instruction for the given number of 32-bit words.
 static FailureOr<Value> createGlobalLoad(OpBuilder &rewriter, Location loc,
                                          Value dst, Value addr,
-                                         int64_t numWords) {
+                                         int64_t numWords,
+                                         int64_t numBytes = -1) {
   Value cOff = getI32Constant(rewriter, loc, 0);
+  // Use a 16-bit load when the element is exactly 2 bytes.
+  if (numWords == 1 && numBytes == 2)
+    return GlobalLoadUshort::create(rewriter, loc, dst, addr, nullptr, cOff)
+        .getDestRes();
   switch (numWords) {
   case 1:
     return GlobalLoadDword::create(rewriter, loc, dst, addr, nullptr, cOff)
@@ -222,8 +227,8 @@ static LogicalResult createDSWrite(OpBuilder &rewriter, Location loc,
 
 /// Create a GLOBAL_STORE instruction for the given number of 32-bit words.
 static LogicalResult createGlobalStore(OpBuilder &rewriter, Location loc,
-                                       Value data, Value addr,
-                                       int64_t numWords) {
+                                       Value data, Value addr, int64_t numWords,
+                                       int64_t numBytes = -1) {
   Value cOff = getI32Constant(rewriter, loc, 0);
   Value dOff = nullptr;
   if (isSGPR(addr.getType(), 0))
@@ -232,6 +237,11 @@ static LogicalResult createGlobalStore(OpBuilder &rewriter, Location loc,
                createAllocation(rewriter, loc, getVGPR(rewriter.getContext())),
                cOff)
                .getDstRes();
+  // Use a 16-bit store when the element is exactly 2 bytes.
+  if (numWords == 1 && numBytes == 2) {
+    GlobalStoreShort::create(rewriter, loc, data, addr, dOff, cOff);
+    return success();
+  }
   switch (numWords) {
   case 1:
     GlobalStoreDword::create(rewriter, loc, data, addr, dOff, cOff);
@@ -259,7 +269,8 @@ PtrLoadOpPattern::matchAndRewrite(ptr::LoadOp op, OpAdaptor adaptor,
                                   ConversionPatternRewriter &rewriter) const {
   Location loc = op.getLoc();
   Type resultType = converter.convertType(op.getResult());
-  int64_t numWords = (converter.getTypeSize(op.getResult().getType()) + 3) / 4;
+  int64_t numBytes = converter.getTypeSize(op.getResult().getType());
+  int64_t numWords = (numBytes + 3) / 4;
   Value dst = createAlloca(rewriter, loc, resultType);
   Value addr = adaptor.getPtr();
   auto ptrType = cast<ptr::PtrType>(op.getPtr().getType());
@@ -267,7 +278,7 @@ PtrLoadOpPattern::matchAndRewrite(ptr::LoadOp op, OpAdaptor adaptor,
   FailureOr<Value> result =
       isLocalMemory(ptrType)
           ? createDSRead(rewriter, loc, dst, addr, numWords)
-          : createGlobalLoad(rewriter, loc, dst, addr, numWords);
+          : createGlobalLoad(rewriter, loc, dst, addr, numWords, numBytes);
   if (failed(result))
     return rewriter.notifyMatchFailure(op,
                                        "unsupported word count for ptr.load");
@@ -285,7 +296,8 @@ PtrStoreOpPattern::matchAndRewrite(ptr::StoreOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter) const {
   Location loc = op.getLoc();
   Value data = adaptor.getValue();
-  int64_t numWords = (converter.getTypeSize(op.getValue().getType()) + 3) / 4;
+  int64_t numBytes = converter.getTypeSize(op.getValue().getType());
+  int64_t numWords = (numBytes + 3) / 4;
   Value addr = adaptor.getPtr();
   auto ptrType = cast<ptr::PtrType>(op.getPtr().getType());
 
@@ -309,7 +321,7 @@ PtrStoreOpPattern::matchAndRewrite(ptr::StoreOp op, OpAdaptor adaptor,
   LogicalResult created =
       isLocalMemory(ptrType)
           ? createDSWrite(rewriter, loc, data, addr, numWords)
-          : createGlobalStore(rewriter, loc, data, addr, numWords);
+          : createGlobalStore(rewriter, loc, data, addr, numWords, numBytes);
   if (failed(created))
     return rewriter.notifyMatchFailure(op,
                                        "unsupported word count for ptr.store");
