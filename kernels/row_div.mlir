@@ -1,134 +1,188 @@
 // Kernel: C[i, j] = C[i, j] / sum(D[i, :]) for all rows i and columns j.
 //
-// Launch: grid_dim=(M,1,1), block_dim=(64,1,1) — one wavefront per row.
+// C is row-major bf16 (2 bytes per element); D is row-major f32 (4 bytes).
 //
 // Algorithm:
-//   1. Each lane loads D[row, tid], D[row, tid+64], ... and accumulates (f32).
-//   2. Butterfly warp reduction via ds_bpermute_b32 (6 rounds) → lane 0 holds sum.
-//   3. Broadcast sum to all lanes via ds_bpermute_b32 with addr=0.
-//   4. Each lane loads C[row, j] (bf16), extends to f32, divides, truncates
-//      back to bf16, and stores.
+//   Phase 1 (wave 0 only): for each of rows_per_block rows, load D elements
+//   with buffer_load_dword (OOB trick for n_d < 64), reduce via 6-round
+//   butterfly, and write the f32 row sum to LDS.
+//   Phase 2: s_barrier so all waves see the LDS sums.
+//   Phase 3 (all threads): read each row sum from LDS, then divide the
+//   corresponding bf16 C elements cooperatively.
 //
-// C is row-major bf16 (2 bytes per element); D is row-major f32 (4 bytes).
+// Shared memory: rows_per_block * 4 bytes (max 64 rows = 256 bytes).
+
+#map_lane      = affine_map<(d0) -> (d0 mod 64)>
+#map_wid       = affine_map<(d0) -> (d0 floordiv 64)>
+#map_start_row = affine_map<(d0)[s0] -> (d0 * s0)>
+#map_row_add   = affine_map<(d0, d1) -> (d0 + d1)>
+#map_elem      = affine_map<(d0, d1)[s0] -> (d0 * s0 + d1)>
+#map_times4    = affine_map<(d0) -> (d0 * 4)>
+#map_times2    = affine_map<(d0) -> (d0 * 2)>
+#map_row_byte  = affine_map<(d0)[s0] -> (d0 * s0 * 2)>
 
 amdgcn.module @row_div_mod target = #amdgcn.target<gfx942> {
-
   func.func @row_div(
-      %c_ptr : !ptr.ptr<#amdgcn.addr_space<global, read_write>>,
-      %d_ptr : !ptr.ptr<#amdgcn.addr_space<global, read_write>>,
-      %n     : i32,
-      %n_d   : i32)
-      attributes {gpu.kernel} {
+      %c_ptr         : !ptr.ptr<#amdgcn.addr_space<global, read_write>>,
+      %d_ptr         : !ptr.ptr<#amdgcn.addr_space<global, read_write>>,
+      %m             : i32,
+      %n             : i32,
+      %n_d           : i32,
+      %rows_per_block: i32)
+      attributes {gpu.kernel, gpu.shared_memory_size = 256 : i32} {
 
-    %tid  = aster_utils.thread_id x
-    %row  = aster_utils.block_id x
-
-    %c0f  = arith.constant 0.0 : f32
-    %c4   = arith.constant 4   : i32
-    %c64  = arith.constant 64  : i32
-    %c2   = arith.constant 2   : i32
-    %c0   = arith.constant 0   : i32
-
-    // -------------------------------------------------------------------------
-    // Phase 1: accumulate partial row sum of D.
-    // Each lane sums D[row, tid], D[row, tid+64], ...
-    // -------------------------------------------------------------------------
-
-    %d_row_elems = arith.muli %row, %n_d : i32
-    %d_row_byte  = arith.muli %d_row_elems, %c4 : i32
-    %d_row_ptr   = ptr.ptr_add %d_ptr, %d_row_byte
-                     : !ptr.ptr<#amdgcn.addr_space<global, read_write>>, i32
-
-    %partial = scf.for unsigned %k = %tid to %n_d step %c64
-        iter_args(%acc = %c0f) -> f32 : i32 {
-      %boff = arith.muli %k, %c4 : i32
-      %dptr = ptr.ptr_add %d_row_ptr, %boff
-                : !ptr.ptr<#amdgcn.addr_space<global, read_write>>, i32
-      %val  = ptr.load %dptr
-                : !ptr.ptr<#amdgcn.addr_space<global, read_write>> -> f32
-      %nacc = arith.addf %acc, %val : f32
-      scf.yield %nacc : f32
-    }
-
-    // -------------------------------------------------------------------------
-    // Phase 2: butterfly warp reduction via ds_bpermute_b32.
-    // ds_bpermute_b32: VDST[i] = DATA[(ADDR[i]/4) % 64]  (gather).
-    //
-    // The loop runs 6 rounds (log2(64)) with aster.constexpr, so the compiler
-    // fully unrolls it at compile time. At each unrolled iteration %round is a
-    // constant, making stride = 1 << round fold to 1, 2, 4, 8, 16, 32.
-    // After 6 rounds, lane 0 holds the total sum of all 64 lanes.
-    // -------------------------------------------------------------------------
-
-    // Lift f32 partial sum into a VGPR and thread ID into a VGPR.
-    %acc_init = lsir.to_reg %partial : f32 -> !amdgcn.vgpr
-    %tid_v    = lsir.to_reg %tid     : i32 -> !amdgcn.vgpr
+    %c0_i32 = arith.constant 0   : i32
+    %c2_i32 = arith.constant 2   : i32
+    %c4_i32 = arith.constant 4   : i32
+    %neg1   = arith.constant -1  : i32
 
     %c0_idx = arith.constant 0 : index
     %c1_idx = arith.constant 1 : index
     %c6_idx = arith.constant 6 : index
 
-    // iter_arg carries the running VGPR sum across rounds.
-    %s5 = scf.for %round = %c0_idx to %c6_idx step %c1_idx
-        iter_args(%sum = %acc_init) -> !amdgcn.vgpr {
-      // stride = 1 << round  (index → i32 constant after unrolling).
-      %stride_idx = arith.shli %c1_idx, %round : index
-      %stride_i32 = arith.index_cast %stride_idx : index to i32
-      // peer lane = tid XOR stride; ds_bpermute addr = peer * 4.
-      %xor_v  = amdgcn.alloca : !amdgcn.vgpr
-      %peer   = amdgcn.v_xor_b32 outs(%xor_v) ins(%stride_i32, %tid_v)
-                  : outs(!amdgcn.vgpr) ins(i32, !amdgcn.vgpr)
-      %addr_v = amdgcn.alloca : !amdgcn.vgpr
-      %addr   = amdgcn.v_lshlrev_b32 outs(%addr_v) ins(%c2, %peer)
-                  : outs(!amdgcn.vgpr) ins(i32, !amdgcn.vgpr)
-      // Gather from the peer lane, wait, add.
-      %perm_v = amdgcn.alloca : !amdgcn.vgpr
-      %perm, %tok = amdgcn.ds_bpermute_b32 outs(%perm_v) ins(%addr, %sum) args(%c0)
-                      : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr) args(i32)
-                        -> !amdgcn.read_token<shared>
-      %new_sum_v = amdgcn.alloca : !amdgcn.vgpr
-      %new_sum   = amdgcn.v_add_f32 outs(%new_sum_v) ins(%sum, %perm)
-                     : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr)
-      scf.yield %new_sum : !amdgcn.vgpr
-    } {aster.constexpr}
+    %tid  = gpu.thread_id x
+    %bid  = gpu.block_id  x
+    %bdim = gpu.block_dim x
+
+    %n_idx   = arith.index_cast %n             : i32 to index
+    %n_d_idx = arith.index_cast %n_d           : i32 to index
+    %rpb_idx = arith.index_cast %rows_per_block : i32 to index
+
+    %lane_idx = affine.apply #map_lane(%tid)
+    %wid_idx  = affine.apply #map_wid(%tid)
+    %lane_i32 = arith.index_cast %lane_idx : index to i32
+
+    %start_row_idx = affine.apply #map_start_row(%bid)[%rpb_idx]
 
     // -------------------------------------------------------------------------
-    // Phase 3: broadcast total sum from lane 0 to all lanes.
-    // All lanes use addr=0, so ds_bpermute reads from lane 0.
+    // Phase 1: wave 0 loads and reduces rows_per_block rows of D.
     // -------------------------------------------------------------------------
-    %bc_v    = amdgcn.alloca : !amdgcn.vgpr
-    %bc_addr = amdgcn.v_mov_b32 outs(%bc_v) ins(%c0)
-                 : outs(!amdgcn.vgpr) ins(i32)
-    %tot_v   = amdgcn.alloca : !amdgcn.vgpr
-    %tot, %t6 = amdgcn.ds_bpermute_b32 outs(%tot_v) ins(%bc_addr, %s5) args(%c0)
-                  : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr) args(i32)
-                    -> !amdgcn.read_token<shared>
 
-    // Convert the total sum VGPR back to f32 for the division loop.
-    %total_f32 = lsir.from_reg %tot : !amdgcn.vgpr -> f32
+    // Build buffer descriptor for D: num_records = m * n_d * 4 bytes, stride=0.
+    %m_idx         = arith.index_cast %m   : i32 to index
+    %total_elems   = affine.apply #map_elem(%m_idx, %c0_idx)[%n_d_idx]
+    %total_bytes_i = affine.apply #map_times4(%total_elems)
+    %total_bytes   = arith.index_cast %total_bytes_i : index to i32
+    %d_sgpr        = lsir.to_reg %d_ptr      : !ptr.ptr<#amdgcn.addr_space<global, read_write>> -> !amdgcn.sgpr<[? + 2]>
+    %total_bytes_s = lsir.to_reg %total_bytes : i32 -> !amdgcn.sgpr
+    %d_rsrc = amdgcn.make_buffer_rsrc %d_sgpr, %total_bytes_s, %c0_i32,
+        cache_swizzle = false, swizzle_enable = false, flags = 131072
+        : (!amdgcn.sgpr<[? + 2]>, !amdgcn.sgpr, i32) -> !amdgcn.sgpr<[? + 4]>
+
+    %is_wave0 = arith.cmpi eq, %wid_idx, %c0_idx : index
+    scf.if %is_wave0 {
+      scf.for %r = %c0_idx to %rpb_idx step %c1_idx {
+        %global_row = affine.apply #map_row_add(%start_row_idx, %r)
+
+        // Per-lane element index: global_row * n_d + lane.
+        %elem_idx    = affine.apply #map_elem(%global_row, %lane_idx)[%n_d_idx]
+        %byte_off_i  = affine.apply #map_times4(%elem_idx)
+        %byte_off    = arith.index_cast %byte_off_i : index to i32
+
+        // OOB trick: lanes past n_d receive -1, which the buffer descriptor
+        // treats as out-of-bounds and returns 0.
+        %in_bounds = arith.cmpi slt, %lane_i32, %n_d : i32
+        %voff_i32  = arith.select %in_bounds, %byte_off, %neg1 : i32
+        %voff      = lsir.to_reg %voff_i32  : i32 -> !amdgcn.vgpr
+        %c0_s      = lsir.to_reg %c0_i32    : i32 -> !amdgcn.sgpr
+
+        %load_dst = amdgcn.alloca : !amdgcn.vgpr
+        %partial, %ld_tok = amdgcn.buffer_load_dword dest %load_dst addr %d_rsrc
+            offset u(%c0_s) + off_idx(%voff) + c(%c0_i32) {offen}
+            : outs(!amdgcn.vgpr) ins(!amdgcn.sgpr<[? + 4]>, !amdgcn.sgpr, !amdgcn.vgpr)
+              mods(i32) -> !amdgcn.read_token<flat>
+        %wf_ld = amdgcn.wait deps %ld_tok
+            : !amdgcn.read_token<flat> -> !amdgcn.fence_token
+
+        // Butterfly reduction: 6 constexpr rounds, strides 1, 2, 4, 8, 16, 32.
+        // Each round gathers from the XOR-peer lane and accumulates.
+        %lane_v = lsir.to_reg %lane_i32 : i32 -> !amdgcn.vgpr
+        %s6 = scf.for %round = %c0_idx to %c6_idx step %c1_idx
+            iter_args(%acc = %partial) -> !amdgcn.vgpr {
+          %stride_idx = arith.shli %c1_idx, %round : index
+          %stride_i32 = arith.index_cast %stride_idx : index to i32
+          %xor_v = amdgcn.alloca : !amdgcn.vgpr
+          %peer  = amdgcn.v_xor_b32 outs(%xor_v) ins(%stride_i32, %lane_v)
+                   : outs(!amdgcn.vgpr) ins(i32, !amdgcn.vgpr)
+          %addr_v = amdgcn.alloca : !amdgcn.vgpr
+          %addr   = amdgcn.v_lshlrev_b32 outs(%addr_v) ins(%c2_i32, %peer)
+                    : outs(!amdgcn.vgpr) ins(i32, !amdgcn.vgpr)
+          %perm_v = amdgcn.alloca : !amdgcn.vgpr
+          %perm, %ptok = amdgcn.ds_bpermute_b32 outs(%perm_v) ins(%addr, %acc) args(%c0_i32)
+                         : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr) args(i32)
+                           -> !amdgcn.read_token<shared>
+          %ns_v = amdgcn.alloca : !amdgcn.vgpr
+          %ns   = amdgcn.v_add_f32 outs(%ns_v) ins(%acc, %perm)
+                  : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr)
+          scf.yield %ns : !amdgcn.vgpr
+        } {aster.constexpr}
+
+        // Broadcast total from lane 0 to all lanes via ds_bpermute with addr=0.
+        %bc_addr_v = amdgcn.alloca : !amdgcn.vgpr
+        %bc_addr   = amdgcn.v_mov_b32 outs(%bc_addr_v) ins(%c0_i32)
+                     : outs(!amdgcn.vgpr) ins(i32)
+        %tot_v = amdgcn.alloca : !amdgcn.vgpr
+        %total, %btok = amdgcn.ds_bpermute_b32 outs(%tot_v) ins(%bc_addr, %s6) args(%c0_i32)
+                        : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr) args(i32)
+                          -> !amdgcn.read_token<shared>
+
+        // Lane 0 writes the row sum to LDS at byte offset r * 4.
+        %is_lane0 = arith.cmpi eq, %lane_i32, %c0_i32 : i32
+        scf.if %is_lane0 {
+          %lds_byte_i = affine.apply #map_times4(%r)
+          %lds_byte   = arith.index_cast %lds_byte_i : index to i32
+          %lds_addr_v = lsir.to_reg %lds_byte : i32 -> !amdgcn.vgpr
+          %wtok = amdgcn.ds_write_b32 data %total addr %lds_addr_v offset c(%c0_i32)
+                  : ins(!amdgcn.vgpr, !amdgcn.vgpr) mods(i32) -> !amdgcn.write_token<shared>
+          %wf_w = amdgcn.wait deps %wtok
+              : !amdgcn.write_token<shared> -> !amdgcn.fence_token
+        }
+      }
+    }
 
     // -------------------------------------------------------------------------
-    // Phase 4: divide each C[row, j] (bf16) by the total row sum.
-    // Each lane handles j = tid, tid+64, tid+128, ...
-    // C uses 2-byte elements; byte offset = j * 2.
+    // Phase 2: synchronise the block so LDS sums are visible to all waves.
     // -------------------------------------------------------------------------
-    %c_row_elems = arith.muli %row, %n : i32
-    %c_row_byte  = arith.muli %c_row_elems, %c2 : i32
-    %c_row_ptr   = ptr.ptr_add %c_ptr, %c_row_byte
-                     : !ptr.ptr<#amdgcn.addr_space<global, read_write>>, i32
+    amdgcn.s_barrier
 
-    scf.for unsigned %j = %tid to %n step %c64 : i32 {
-      %boff  = arith.muli %j, %c2 : i32
-      %ceptr = ptr.ptr_add %c_row_ptr, %boff
-                 : !ptr.ptr<#amdgcn.addr_space<global, read_write>>, i32
-      // Load bf16, extend to f32, divide, truncate back to bf16, store.
-      %cval_bf16 = ptr.load %ceptr
-                     : !ptr.ptr<#amdgcn.addr_space<global, read_write>> -> bf16
-      %cval_f32  = arith.extf %cval_bf16 : bf16 to f32
-      %cnew_f32  = arith.divf %cval_f32, %total_f32 : f32
-      %cnew_bf16 = arith.truncf %cnew_f32 : f32 to bf16
-      ptr.store %cnew_bf16, %ceptr
-                  : bf16, !ptr.ptr<#amdgcn.addr_space<global, read_write>>
+    // -------------------------------------------------------------------------
+    // Phase 3: all threads divide their C elements by the LDS row sums.
+    // -------------------------------------------------------------------------
+    %c_sgpr = lsir.to_reg %c_ptr : !ptr.ptr<#amdgcn.addr_space<global, read_write>> -> !amdgcn.sgpr<[? + 2]>
+
+    scf.for %r = %c0_idx to %rpb_idx step %c1_idx {
+      // Read this row's sum from LDS.
+      %lds_byte_i = affine.apply #map_times4(%r)
+      %lds_byte   = arith.index_cast %lds_byte_i : index to i32
+      %lds_addr_v = lsir.to_reg %lds_byte : i32 -> !amdgcn.vgpr
+      %sum_dst = amdgcn.alloca : !amdgcn.vgpr
+      %sum_vgpr, %rtok = amdgcn.ds_read_b32 dest %sum_dst addr %lds_addr_v offset c(%c0_i32)
+                 : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr) mods(i32) -> !amdgcn.read_token<shared>
+      %wf_rs = amdgcn.wait deps %rtok
+          : !amdgcn.read_token<shared> -> !amdgcn.fence_token
+      %total_f32 = lsir.from_reg %sum_vgpr : !amdgcn.vgpr -> f32
+
+      // Pointer to the start of this C row.
+      %global_row    = affine.apply #map_row_add(%start_row_idx, %r)
+      %c_row_byte_i  = affine.apply #map_row_byte(%global_row)[%n_idx]
+      %c_row_byte    = arith.index_cast %c_row_byte_i : index to i32
+      %c_row_ptr     = ptr.ptr_add %c_ptr, %c_row_byte
+                         : !ptr.ptr<#amdgcn.addr_space<global, read_write>>, i32
+
+      // Each thread strides across columns with step bdim.
+      scf.for unsigned %j = %tid to %n_idx step %bdim {
+        %c_off_i   = affine.apply #map_times2(%j)
+        %c_off     = arith.index_cast %c_off_i : index to i32
+        %ceptr     = ptr.ptr_add %c_row_ptr, %c_off
+                       : !ptr.ptr<#amdgcn.addr_space<global, read_write>>, i32
+        %cv_bf16   = ptr.load %ceptr
+                       : !ptr.ptr<#amdgcn.addr_space<global, read_write>> -> bf16
+        %cv_f32    = arith.extf %cv_bf16 : bf16 to f32
+        %cr_f32    = arith.divf %cv_f32, %total_f32 : f32
+        %cr_bf16   = arith.truncf %cr_f32 : f32 to bf16
+        ptr.store %cr_bf16, %ceptr
+            : bf16, !ptr.ptr<#amdgcn.addr_space<global, read_write>>
+      }
     }
 
     func.return
