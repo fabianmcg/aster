@@ -117,22 +117,13 @@ amdgcn.module @row_div_mod target = #amdgcn.target<gfx942> {
           scf.yield %ns : !amdgcn.vgpr
         } {aster.constexpr}
 
-        // Broadcast total from lane 0 to all lanes via ds_bpermute with addr=0.
-        %bc_addr_v = amdgcn.alloca : !amdgcn.vgpr
-        %bc_addr   = amdgcn.v_mov_b32 outs(%bc_addr_v) ins(%c0_i32)
-                     : outs(!amdgcn.vgpr) ins(i32)
-        %tot_v = amdgcn.alloca : !amdgcn.vgpr
-        %total, %btok = amdgcn.ds_bpermute_b32 outs(%tot_v) ins(%bc_addr, %s6) args(%c0_i32)
-                        : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr, !amdgcn.vgpr) args(i32)
-                          -> !amdgcn.read_token<shared>
-
         // Lane 0 writes the row sum to LDS at byte offset r * 4.
         %is_lane0 = arith.cmpi eq, %lane_i32, %c0_i32 : i32
         scf.if %is_lane0 {
           %lds_byte_i = affine.apply #map_times4(%r)
           %lds_byte   = arith.index_cast %lds_byte_i : index to i32
           %lds_addr_v = lsir.to_reg %lds_byte : i32 -> !amdgcn.vgpr
-          %wtok = amdgcn.ds_write_b32 data %total addr %lds_addr_v offset c(%c0_i32)
+          %wtok = amdgcn.ds_write_b32 data %s6 addr %lds_addr_v offset c(%c0_i32)
                   : ins(!amdgcn.vgpr, !amdgcn.vgpr) mods(i32) -> !amdgcn.write_token<shared>
           %wf_w = amdgcn.wait deps %wtok
               : !amdgcn.write_token<shared> -> !amdgcn.fence_token
