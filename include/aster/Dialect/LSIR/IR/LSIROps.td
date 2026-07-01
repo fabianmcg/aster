@@ -975,6 +975,33 @@ def LSIR_SubFOp : BinaryFOp<"subf"> {
 }
 
 //===----------------------------------------------------------------------===//
+// SqrtFOp
+//===----------------------------------------------------------------------===//
+
+class UnaryFOp<string mnemonic, list<Trait> traits = []> :
+    LSIR_InstOp<mnemonic, traits # [InstInferType, PureInst]> {
+  let leadingArguments = (ins AnyFloatTypeAttr:$semantics);
+  let outputs = (ins RegType:$dst);
+  let inputs = (ins IntOrRegType:$value);
+  let assemblyFormat = [{
+    $semantics $dst `,` $value attr-dict `:` type($dst) `,` type($value)
+  }];
+}
+
+def LSIR_SqrtFOp : UnaryFOp<"sqrtf"> {
+  let summary = "Floating point square root operation";
+  let description = [{
+    The `lsir.sqrtf` operation computes the IEEE-754 square root of a
+    floating-point value.
+
+    Example:
+    ```mlir
+    %result = lsir.sqrtf f32 %dst, %value : !amdgcn.vgpr, !amdgcn.vgpr
+    ```
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // SubIOp
 //===----------------------------------------------------------------------===//
 

@@ -121,6 +121,10 @@ def IsScaledMMA : InstProp<"scaled_mma">;
 // Wave matrix multiply-accumulate (gfx1250 WMMA, wave32 VGPR-only)
 def IsWMMA : InstProp<"wmma">;
 
+// Transcendental VALU instructions (v_rcp_f32, v_sqrt_f32, etc.).
+// A non-trans VALU op consuming the result requires 1 V_NOP wait state.
+def IsTrans : InstProp<"trans">;
+
 // Vector ALU encoding families
 def IsVOP1 : InstProp<"vop1">;
 def IsVOP2 : InstProp<"vop2">;

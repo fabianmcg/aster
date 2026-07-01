@@ -1801,6 +1801,7 @@ def VRcpIflagF32 : VOP1Out1In1Inst<"v_rcp_iflag_f32",
              OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>]
   > {
   let archs = [CDNA3Isa, CDNA4Isa];
+  let props = [IsVALU, IsTrans];
   let description = [{
     Calculate the reciprocal of the float input in a manner suitable for
     integer division. Intended for use in an integer division macro.
@@ -1815,6 +1816,56 @@ def VRcpIflagF32 : VOP1Out1In1Inst<"v_rcp_iflag_f32",
   ];
 }
 #endif // VRCPIFLAGF32_DEF
+
+#ifndef VSQRTF32_DEF
+#define VSQRTF32_DEF
+def VSqrtF32 : VOP1Out1In1Inst<"v_sqrt_f32",
+    /*dst0=*/[VGPROf<1>],
+    /*src0=*/[OneGPROrSRegOrConstOf<InlineLitFP<[F32]>, F32>,
+             OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>]
+  > {
+  let archs = [CDNA3Isa, CDNA4Isa];
+  let props = [IsVALU, IsTrans];
+  let description = [{
+    Calculate the square root of the single-precision float input using IEEE
+    rules and store the result into a vector register. 1ULP accuracy; denormals
+    are flushed to zero.
+  }];
+  let encodings = [
+    InstEnc<[ENC_VOP1_CDNA3, ENC_VOP1_CDNA4], 0b00100111, (pred
+      OneGPROrSRegOrConstOf<InlineLitFP<[F32]>, F32>:$src0
+    )>,
+    InstEnc<[ENC_VOP3_CDNA3, ENC_VOP3_CDNA4], 0b0110100111, (pred
+      OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>:$src0
+    )>
+  ];
+}
+#endif // VSQRTF32_DEF
+
+#ifndef VRSQF32_DEF
+#define VRSQF32_DEF
+def VRsqF32 : VOP1Out1In1Inst<"v_rsq_f32",
+    /*dst0=*/[VGPROf<1>],
+    /*src0=*/[OneGPROrSRegOrConstOf<InlineLitFP<[F32]>, F32>,
+             OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>]
+  > {
+  let archs = [CDNA3Isa, CDNA4Isa];
+  let props = [IsVALU, IsTrans];
+  let description = [{
+    Calculate the reciprocal square root of the single-precision float input
+    using IEEE rules and store the result into a vector register. 1ULP
+    accuracy; denormals are flushed to zero.
+  }];
+  let encodings = [
+    InstEnc<[ENC_VOP1_CDNA3, ENC_VOP1_CDNA4], 0b00100100, (pred
+      OneGPROrSRegOrConstOf<InlineLitFP<[F32]>, F32>:$src0
+    )>,
+    InstEnc<[ENC_VOP3_CDNA3, ENC_VOP3_CDNA4], 0b0110100100, (pred
+      OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>:$src0
+    )>
+  ];
+}
+#endif // VRSQF32_DEF
 
 #ifndef VMOVB32_DEF
 #define VMOVB32_DEF
@@ -1898,6 +1949,7 @@ def VRcpF32 : VOP1Out1In1Inst<"v_rcp_f32",
              OneGPROrSRegOrLitOf<InlineLitFP<[F32]>>]
   > {
   let archs = [CDNA3Isa, CDNA4Isa];
+  let props = [IsVALU, IsTrans];
   let description = [{
     Compute the IEEE reciprocal of the single-precision float input.
   }];

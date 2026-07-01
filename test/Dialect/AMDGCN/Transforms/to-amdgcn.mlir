@@ -1702,6 +1702,16 @@ func.func @test_mulf_f32(%dst: !amdgcn.vgpr, %lhs: !amdgcn.vgpr, %rhs: !amdgcn.v
 
 // -----
 
+// CHECK-LABEL: func.func @test_sqrtf_f32
+// CHECK-SAME: (%[[DST:.*]]: !amdgcn.vgpr, %[[SRC:.*]]: !amdgcn.vgpr)
+// CHECK: v_sqrt_f32 outs(%[[DST]]) ins(%[[SRC]])
+func.func @test_sqrtf_f32(%dst: !amdgcn.vgpr, %src: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %res = lsir.sqrtf f32 %dst, %src : !amdgcn.vgpr, !amdgcn.vgpr
+  return %res : !amdgcn.vgpr
+}
+
+// -----
+
 // CHECK-LABEL: func.func @test_maxf_f32
 // CHECK-SAME: (%[[DST:.*]]: !amdgcn.vgpr, %[[LHS:.*]]: !amdgcn.vgpr, %[[RHS:.*]]: !amdgcn.vgpr)
 // CHECK: v_max_f32 outs(%[[DST]]) ins(%[[LHS]], %[[RHS]])

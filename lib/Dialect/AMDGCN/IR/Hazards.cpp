@@ -733,18 +733,54 @@ bool CDNA3OpselSdwaHazardAttr::isHazardTriggered(const Hazard &,
 
 //===----------------------------------------------------------------------===//
 // Case 21: TransOpHazard
+//
+// A trans op (v_rcp_f32, v_sqrt_f32, etc.) writing a VGPR followed by a
+// non-trans VALU op reading that VGPR requires 1 V_NOP wait state.
 //===----------------------------------------------------------------------===//
-bool CDNA3TransOpHazardAttr::matchInst(AMDGCNInstOpInterface,
-                                       ISAVersion) const {
-  return false; // TODO: Trans op detection not implemented.
+bool CDNA3TransOpHazardAttr::matchInst(AMDGCNInstOpInterface instOp,
+                                       ISAVersion isaVer) const {
+  if (!instOp.supportsISA(isaVer))
+    return false;
+  // Hazard fires on non-trans VALU consumers.
+  return instOp.hasProp(InstProp::IsValu) && !instOp.hasProp(InstProp::Trans);
 }
 
 void CDNA3TransOpHazardAttr::populateHazardsFor(
-    AMDGCNInstOpInterface, SmallVectorImpl<Hazard> &) const {}
+    AMDGCNInstOpInterface instOp, SmallVectorImpl<Hazard> &hazards) const {
+  if (!instOp.hasProp(InstProp::Trans))
+    return;
 
-bool CDNA3TransOpHazardAttr::isHazardTriggered(const Hazard &,
-                                               AMDGCNInstOpInterface) const {
-  return false;
+  for (OpOperand &operand : getOpOperands(instOp.getInstOuts())) {
+    auto regTy = dyn_cast<AMDGCNRegisterTypeInterface>(operand.get().getType());
+    if (!regTy || !regTy.hasAllocatedSemantics())
+      continue;
+    if (regTy.getRegisterKind() != RegisterKind::VGPR)
+      continue;
+    hazards.push_back(Hazard(cast<HazardCheckerAttrInterface>(*this), operand,
+                             getInstCounts(0)));
+  }
+}
+
+bool CDNA3TransOpHazardAttr::isHazardTriggered(
+    const Hazard &hazard, AMDGCNInstOpInterface instOp) const {
+  assert(hazard.getHazard() == *this && "Hazard mismatch");
+
+  if (!instOp.hasProp(InstProp::IsValu) || instOp.hasProp(InstProp::Trans))
+    return false;
+
+  OpOperand *vgprOperand = hazard.getOperand();
+  if (!vgprOperand)
+    return false;
+
+  auto vgprRegTy =
+      dyn_cast<AMDGCNRegisterTypeInterface>(vgprOperand->get().getType());
+  if (!vgprRegTy || vgprRegTy.getRegisterKind() != RegisterKind::VGPR)
+    return false;
+
+  return llvm::any_of(instOp.getInstIns(), [&](Value input) {
+    auto inputRegTy = dyn_cast<AMDGCNRegisterTypeInterface>(input.getType());
+    return inputRegTy && inputRegTy.overlaps(vgprRegTy);
+  });
 }
 
 //===----------------------------------------------------------------------===//

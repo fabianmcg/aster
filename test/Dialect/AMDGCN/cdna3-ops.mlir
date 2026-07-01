@@ -363,6 +363,20 @@ func.func @test_sopp_barrier() {
 }
 
 //===----------------------------------------------------------------------===//
+// CDNA3 VOP1 Transcendental Operations
+//===----------------------------------------------------------------------===//
+
+func.func @test_v_sqrt_f32(%src: !amdgcn.vgpr, %dst: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %result = amdgcn.v_sqrt_f32 outs(%dst) ins(%src) : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr)
+  return %result : !amdgcn.vgpr
+}
+
+func.func @test_v_rsq_f32(%src: !amdgcn.vgpr, %dst: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %result = amdgcn.v_rsq_f32 outs(%dst) ins(%src) : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr)
+  return %result : !amdgcn.vgpr
+}
+
+//===----------------------------------------------------------------------===//
 // CDNA3 VOP2 Operations
 //===----------------------------------------------------------------------===//
 
