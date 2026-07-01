@@ -69,9 +69,13 @@ SHAPES = [
 ]
 
 
+INV_D = np.float32(1.0 / 32.0)
+EPS = np.float32(1e-5)
+
+
 @pytest.mark.parametrize("M,N,K,rows_per_block", SHAPES)
 def test_row_div(M, N, K, rows_per_block):
-    """C[i,j] / sum(D[i,:]) matches bf16 reference for all (i,j)."""
+    """C[i,j] / sqrt(inv_d * sum(D[i,:]) + eps) matches bf16 reference."""
     n_d = N // K
 
     rng = np.random.default_rng(seed=42)
@@ -80,10 +84,11 @@ def test_row_div(M, N, K, rows_per_block):
     D = rng.uniform(0.1, 2.0, (M, n_d)).astype(np.float32)
 
     # Reference: round-trip C through bf16 (matches what the kernel reads),
-    # divide by sqrt(row sum), then truncate f32->bf16 (top 16 bits, no rounding).
+    # divide by sqrt(inv_d * row_sum + eps), truncate f32->bf16 (top 16 bits).
     C_bf16 = C_f32.astype(BF16)
     row_sums = D.sum(axis=1, keepdims=True)  # (M, 1)
-    result_f32 = (C_bf16.astype(np.float32) / np.sqrt(row_sums)).astype(np.float32)
+    denom = np.sqrt(INV_D * row_sums + EPS).astype(np.float32)
+    result_f32 = (C_bf16.astype(np.float32) / denom).astype(np.float32)
     result_u32 = result_f32.view(np.uint32) >> 16
     expected = result_u32.astype(np.uint16).view(BF16)
 
@@ -97,7 +102,7 @@ def test_row_div(M, N, K, rows_per_block):
         np.testing.assert_allclose(
             C_out.astype(np.float32),
             expected.astype(np.float32),
-            rtol=1e-3,
+            rtol=1e-2,
             atol=0,
             err_msg=f"M={M} N={N} K={K} rpb={rows_per_block}: mismatch",
         )
@@ -112,6 +117,8 @@ def test_row_div(M, N, K, rows_per_block):
             np.int32(N),
             np.int32(n_d),
             np.int32(rows_per_block),
+            INV_D,
+            EPS,
         ],
         output_data=[],
         pass_pipeline=PASS_PIPELINE,

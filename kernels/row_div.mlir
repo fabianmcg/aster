@@ -1,4 +1,4 @@
-// Kernel: C[i, j] = C[i, j] / sqrt(sum(D[i, :])) for all rows i and columns j.
+// Kernel: C[i, j] = C[i, j] / sqrt(inv_d * sum(D[i, :]) + eps) for all rows i and columns j.
 //
 // C is row-major bf16 (2 bytes per element); D is row-major f32 (4 bytes).
 //
@@ -32,7 +32,9 @@ amdgcn.module @row_div_mod target = #amdgcn.target<gfx942> {
       %m             : i32,
       %n             : i32,
       %n_d           : i32,
-      %rows_per_block: i32)
+      %rows_per_block: i32,
+      %inv_d         : f32,
+      %eps           : f32)
       attributes {gpu.kernel, gpu.shared_memory_size = 256 : i32} {
 
     %c0_i32 = arith.constant 0   : i32
@@ -170,8 +172,12 @@ amdgcn.module @row_div_mod target = #amdgcn.target<gfx942> {
                  : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr) mods(i32) -> !amdgcn.read_token<shared>
       %wf_rs = amdgcn.wait deps %rtok
           : !amdgcn.read_token<shared> -> !amdgcn.fence_token
+      %sum_f32    = lsir.from_reg %sum_vgpr : !amdgcn.vgpr -> f32
+      %scaled     = arith.mulf %inv_d, %sum_f32 : f32
+      %shifted    = arith.addf %scaled, %eps : f32
+      %shifted_v  = lsir.to_reg %shifted : f32 -> !amdgcn.vgpr
       %sqrt_dst_v = lsir.alloca : !amdgcn.vgpr
-      %sqrt_v     = lsir.sqrtf f32 %sqrt_dst_v, %sum_vgpr : !amdgcn.vgpr, !amdgcn.vgpr
+      %sqrt_v     = lsir.sqrtf f32 %sqrt_dst_v, %shifted_v : !amdgcn.vgpr, !amdgcn.vgpr
       %total_f32  = lsir.from_reg %sqrt_v : !amdgcn.vgpr -> f32
 
       // Pointer to the start of C[row, :].

@@ -28,9 +28,19 @@ BF16 = ml_dtypes.bfloat16
 
 
 def run(
-    m: int, n: int, n_d: int, rows_per_block: int, iters: int, block_dim: int
+    m: int,
+    n: int,
+    n_d: int,
+    rows_per_block: int,
+    iters: int,
+    block_dim: int,
+    inv_d: float,
+    eps: float,
 ) -> None:
     pass_pipeline = make_default_pass_pipeline(PipelineConfig(scf_pipeline=False))
+
+    inv_d_f32 = np.float32(inv_d)
+    eps_f32 = np.float32(eps)
 
     rng = np.random.default_rng(seed=0)
     C_f32 = rng.standard_normal((m, n)).astype(np.float32)
@@ -40,9 +50,10 @@ def run(
     C_flat = np.ascontiguousarray(C_bf16).ravel()
     D_flat = np.ascontiguousarray(D).ravel()
 
-    # Numpy reference (butterfly reduces in a different order, so allow 1% rtol)
+    # Numpy reference: C / sqrt(inv_d * sum(D) + eps)
     row_sums = D.sum(axis=1, keepdims=True)
-    result_f32 = (C_bf16.astype(np.float32) / np.sqrt(row_sums)).astype(np.float32)
+    denom = np.sqrt(inv_d_f32 * row_sums + eps_f32).astype(np.float32)
+    result_f32 = (C_bf16.astype(np.float32) / denom).astype(np.float32)
     result_u32 = result_f32.view(np.uint32) >> 16
     expected = result_u32.astype(np.uint16).view(BF16)
 
@@ -74,6 +85,8 @@ def run(
             np.int32(n),
             np.int32(n_d),
             np.int32(rows_per_block),
+            inv_d_f32,
+            eps_f32,
         ],
         output_data=[],
         pass_pipeline=pass_pipeline,
@@ -107,7 +120,7 @@ def run(
 
     print(
         f"\nConfig: M={m}  N={n}  n_d={n_d}  rpb={rows_per_block}"
-        f"  block_dim={block_dim}  iters={iters}"
+        f"  inv_d={inv_d}  eps={eps}  block_dim={block_dim}  iters={iters}"
     )
     print(f"Best time:  {elapsed_s * 1e6:.3f} µs")
     print(f"C bandwidth (2×read+write): {bw_gbs:.1f} GB/s")
@@ -139,6 +152,18 @@ def main() -> None:
         default=128,
         help="Block dimension (threads per block, default: 128)",
     )
+    parser.add_argument(
+        "--inv_d",
+        type=float,
+        default=1.0,
+        help="Inverse dimension scale factor (default: 1.0)",
+    )
+    parser.add_argument(
+        "--eps",
+        type=float,
+        default=1e-5,
+        help="Epsilon added before sqrt for numerical stability (default: 1e-5)",
+    )
     args = parser.parse_args()
 
     run(
@@ -148,6 +173,8 @@ def main() -> None:
         rows_per_block=args.rows_per_block,
         iters=args.iters,
         block_dim=args.block_dim,
+        inv_d=args.inv_d,
+        eps=args.eps,
     )
 
 
