@@ -69,7 +69,14 @@ amdgcn.module @row_div_mod target = #amdgcn.target<gfx942> {
         cache_swizzle = false, swizzle_enable = false, flags = 131072
         : (!amdgcn.sgpr<[? + 2]>, !amdgcn.sgpr, i32) -> !amdgcn.sgpr<[? + 4]>
 
-    %is_wave0 = arith.cmpi eq, %wid_idx, %c0_idx : index
+
+    %wid_i32         = arith.index_cast %wid_idx   : index to i32
+    %wid_reg = lsir.to_reg %wid_i32 : i32 -> !amdgcn.vgpr
+    %uniform = amdgcn.alloca : !amdgcn.sgpr
+    %wid_uniform = amdgcn.v_readfirstlane_b32 outs(%uniform) ins(%wid_reg) : outs(!amdgcn.sgpr) ins(!amdgcn.vgpr)
+    %wid_ui32 = lsir.from_reg %wid_uniform : !amdgcn.sgpr -> i32
+
+    %is_wave0 = arith.cmpi eq, %wid_ui32, %c0_i32 : i32
     scf.if %is_wave0 {
       scf.for %r = %c0_idx to %rpb_idx step %c1_idx {
         %global_row = affine.apply #map_row_add(%start_row_idx, %r)
