@@ -1,4 +1,4 @@
-// Kernel: C[i, j] = C[i, j] / sum(D[i, :]) for all rows i and columns j.
+// Kernel: C[i, j] = C[i, j] / sqrt(sum(D[i, :])) for all rows i and columns j.
 //
 // C is row-major bf16 (2 bytes per element); D is row-major f32 (4 bytes).
 //
@@ -170,7 +170,9 @@ amdgcn.module @row_div_mod target = #amdgcn.target<gfx942> {
                  : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr) mods(i32) -> !amdgcn.read_token<shared>
       %wf_rs = amdgcn.wait deps %rtok
           : !amdgcn.read_token<shared> -> !amdgcn.fence_token
-      %total_f32 = lsir.from_reg %sum_vgpr : !amdgcn.vgpr -> f32
+      %sqrt_dst_v = lsir.alloca : !amdgcn.vgpr
+      %sqrt_v     = lsir.sqrtf f32 %sqrt_dst_v, %sum_vgpr : !amdgcn.vgpr, !amdgcn.vgpr
+      %total_f32  = lsir.from_reg %sqrt_v : !amdgcn.vgpr -> f32
 
       // Pointer to the start of C[row, :].
       %c_row_byte_i = affine.apply #map_row_byte(%row)[%n_idx]

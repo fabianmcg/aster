@@ -80,10 +80,10 @@ def test_row_div(M, N, K, rows_per_block):
     D = rng.uniform(0.1, 2.0, (M, n_d)).astype(np.float32)
 
     # Reference: round-trip C through bf16 (matches what the kernel reads),
-    # divide by row sum, then truncate f32->bf16 (top 16 bits, no rounding).
+    # divide by sqrt(row sum), then truncate f32->bf16 (top 16 bits, no rounding).
     C_bf16 = C_f32.astype(BF16)
     row_sums = D.sum(axis=1, keepdims=True)  # (M, 1)
-    result_f32 = (C_bf16.astype(np.float32) / row_sums).astype(np.float32)
+    result_f32 = (C_bf16.astype(np.float32) / np.sqrt(row_sums)).astype(np.float32)
     result_u32 = result_f32.view(np.uint32) >> 16
     expected = result_u32.astype(np.uint16).view(BF16)
 
