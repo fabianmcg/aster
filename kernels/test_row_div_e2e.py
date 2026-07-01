@@ -97,7 +97,7 @@ def test_row_div(M, N, K, rows_per_block):
         np.testing.assert_allclose(
             C_out.astype(np.float32),
             expected.astype(np.float32),
-            rtol=1e-2,
+            rtol=1e-3,
             atol=0,
             err_msg=f"M={M} N={N} K={K} rpb={rows_per_block}: mismatch",
         )
