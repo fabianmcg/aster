@@ -42,7 +42,7 @@ def run(
 
     # Numpy reference (butterfly reduces in a different order, so allow 1% rtol)
     row_sums = D.sum(axis=1, keepdims=True)
-    result_f32 = (C_bf16.astype(np.float32) / row_sums).astype(np.float32)
+    result_f32 = (C_bf16.astype(np.float32) / np.sqrt(row_sums)).astype(np.float32)
     result_u32 = result_f32.view(np.uint32) >> 16
     expected = result_u32.astype(np.uint16).view(BF16)
 
