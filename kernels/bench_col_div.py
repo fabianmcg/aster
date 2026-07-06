@@ -5,7 +5,13 @@ Usage:
                             [--iters ITERS] [--block_dim BLOCK_DIM]
 
 Same computation as bench_row_div, but C is stored column-major in memory
-(C[i,j] at element offset j*M + i).
+(C[i,j] at element offset j*M + i), and phase 3 uses buffer_load_dwordx4 /
+buffer_store_dwordx4 in 8-thread groups (see col_div.mlir for details).
+
+Shape preconditions required by the kernel:
+  --n_d            % 16 == 0
+  --rows_per_block %  8 == 0
+  --m % rows_per_block == 0
 
 Reports memory bandwidth relative to a perfect memcopy of C (read + write),
 i.e. 2 * M * N * 2 bytes / elapsed_s.  This shows how close the kernel is

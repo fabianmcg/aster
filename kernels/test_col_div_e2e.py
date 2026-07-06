@@ -3,16 +3,26 @@
 Kernel: col_div in kernels/col_div.mlir.
 
 Same computation as row_div, but C is stored column-major in memory
-(C[i,j] at element offset j*M + i) while D remains row-major. Threads in
-phase 3 are assigned a fixed row within the block (tid mod rows_in_block)
-so consecutive threads touch consecutive rows of the same column — a
-contiguous run in column-major memory — then stride across columns.
+(C[i,j] at element offset j*M + i) while D remains row-major. Phase 3
+groups threads 8-at-a-time; each group covers one 8-row band of C, with
+the 8 lanes hitting 8 consecutive columns via buffer_load_dwordx4 /
+buffer_store_dwordx4 (16 bytes = 8 bf16 rows of one column per lane, 128
+bytes = one cache line per group) — the D row-sum reduction in phase 1 is
+similarly vectorised via dwordx4 f32 loads.
 
-Launch: block_dim=(128,1,1) — 2 wavefronts per block.
+Shape preconditions required by the kernel:
+  n_d              % 16 == 0  — enables dwordx4 D loads.
+  rows_per_block   %  8 == 0  — every block's row range is a full
+                                multiple of 8 (no partial row-bands).
+  M % rows_per_block == 0     — every block, including the last, covers
+                                exactly rows_per_block rows.
+
+Launch: block_dim=(128,1,1) — 2 wavefronts per block; must be a multiple
+        of 8 (16 groups of 8 threads).
         grid_dim=(M // rows_per_block, 1, 1) — one block per row-group.
 
 Parametrised over (M, N, K, rows_per_block) where D has shape (M, N//K)
-and n_d = N // K <= 64. M must be divisible by rows_per_block.
+and n_d = N // K. M must be divisible by rows_per_block.
 """
 
 import os
@@ -33,38 +43,37 @@ WAVE_SIZE = 64
 BLOCK_DIM = 2 * WAVE_SIZE  # 2 waves per block
 BF16 = ml_dtypes.bfloat16
 
-# (M, N, K, rows_per_block) — D shape is (M, N//K), n_d = N//K <= 64.
-# M must be divisible by rows_per_block.
+# (M, N, K, rows_per_block) — D shape is (M, N//K), n_d = N//K.
+# Constraints: n_d % 16 == 0, rows_per_block % 8 == 0, M % rows_per_block == 0.
 SHAPES = [
-    # --- original shapes ---
-    (4, 128, 4, 2),  # n_d=32, rpb=2
-    (8, 256, 8, 4),  # n_d=32, rpb=4
-    (4, 64, 2, 4),  # n_d=32, rpb=4
-    (8, 128, 4, 8),  # n_d=32, rpb=8
-    (4, 64, 64, 4),  # n_d=1,  rpb=4
-    (4, 256, 8, 2),  # n_d=32, rpb=2
-    (16, 128, 4, 4),  # n_d=32, rpb=4
-    (8, 64, 2, 2),  # n_d=32, rpb=2
-    # --- edge / irregular ---
-    (1, 64, 1, 1),  # M=1, n_d=64, single row
-    (1, 128, 2, 1),  # M=1, n_d=64, N=128
-    (3, 96, 3, 3),  # M=rpb (1 block), n_d=32
-    (5, 200, 10, 3),  # M=5, rpb=3 → last block has 2 rows
-    (7, 112, 7, 3),  # M=7, rpb=3 → blocks of 3, 3, 1
-    (9, 108, 3, 4),  # M=9, rpb=4 → blocks of 4, 4, 1; n_d=36
-    (6, 100, 4, 4),  # M=6, rpb=4 → blocks of 4, 2; n_d=25
-    # --- n_d > 64 ---
-    (4, 512, 4, 2),  # n_d=128 (2× wave)
-    (8, 512, 4, 4),  # n_d=128, larger M
-    (4, 1024, 4, 4),  # n_d=256 (4× wave)
-    (2, 128, 1, 2),  # n_d=128, M=2
-    # --- large N ---
-    (16, 1024, 32, 4),  # n_d=32, N=1024
-    (32, 2048, 64, 8),  # n_d=32, N=2048
-    (16, 4096, 64, 8),  # n_d=64, N=4096
-    # --- large M with partial last block ---
-    (100, 256, 8, 7),  # 14 full blocks + 1 partial (2 rows)
-    (127, 128, 4, 16),  # 7 full blocks + 1 partial (15 rows)
+    # --- basic shapes, rpb=8 (1 band per block) ---
+    (8, 128, 4, 8),  # n_d=32, single block
+    (16, 256, 8, 8),  # n_d=32, 2 blocks
+    (32, 64, 2, 8),  # n_d=32, 4 blocks
+    (8, 64, 4, 8),  # n_d=16 (minimum), single block
+    # --- multi-band blocks, rpb=16/24/32 ---
+    (16, 128, 4, 16),  # n_d=32, rpb=16 (2 bands/block)
+    (32, 256, 8, 16),  # n_d=32, rpb=16, 2 blocks
+    (24, 96, 3, 24),  # n_d=32, rpb=24 (3 bands), 1 block
+    (64, 128, 4, 32),  # n_d=32, rpb=32 (4 bands), 2 blocks
+    # --- n_d edge values (multiples of 16) ---
+    (8, 96, 3, 8),  # n_d=32
+    (8, 128, 8, 8),  # n_d=16
+    (16, 128, 2, 16),  # n_d=64
+    (16, 256, 2, 16),  # n_d=128 (2x wave)
+    (8, 512, 4, 8),  # n_d=128
+    (16, 1024, 4, 16),  # n_d=256 (4x wave)
+    # --- N not a multiple of 8 (partial column tile); n_d = N//K stays a
+    # multiple of 16 even though N itself is not. ---
+    (8, 65, 4, 8),  # n_d=16, N=65 (partial tile of 1 col)
+    (8, 97, 6, 8),  # n_d=16, N=97 (partial tile of 1 col)
+    (16, 33, 2, 16),  # n_d=16, N=33 (partial tile of 1 col)
+    # --- large shapes ---
+    (64, 1024, 32, 8),  # n_d=32, N=1024, many blocks
+    (128, 2048, 64, 16),  # n_d=32, N=2048
+    (64, 4096, 64, 8),  # n_d=64, N=4096
+    (256, 256, 8, 8),  # n_d=32, many blocks
+    (128, 128, 4, 32),  # n_d=32, rpb=32
 ]
 
 
