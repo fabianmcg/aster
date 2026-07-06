@@ -85,11 +85,13 @@ amdgcn.module @colv2_mod target = #amdgcn.target<gfx942> {
     %wid64_idx      = affine.apply #map_elem(%wid_idx, %c0_idx)[%c64_idx]
     %wfRowBase_idx  = affine.apply #map_add(%bid256_idx, %wid64_idx)
 
+    // lane_ok is loop-invariant: hoist outside the Phase 1 loop.
+    %lane_ok = arith.cmpi ult, %lane_idx, %n_d_idx : index
+
     scf.for %r = %c0_idx to %c64_idx step %c1_idx {
       %row_idx = affine.apply #map_add(%wfRowBase_idx, %r)
 
       // Predicate: load is valid only when lane < n_d AND row < m.
-      %lane_ok = arith.cmpi ult, %lane_idx, %n_d_idx : index
       %row_ok  = arith.cmpi ult, %row_idx,  %m_idx   : index
       %pred    = arith.andi %lane_ok, %row_ok : i1
 
