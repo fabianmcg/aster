@@ -1001,6 +1001,19 @@ def LSIR_SqrtFOp : UnaryFOp<"sqrtf"> {
   }];
 }
 
+def LSIR_RsqrtFOp : UnaryFOp<"rsqrtf"> {
+  let summary = "Floating point reciprocal square root operation";
+  let description = [{
+    The `lsir.rsqrtf` operation computes the IEEE-754 reciprocal square root of
+    a floating-point value.
+
+    Example:
+    ```mlir
+    %result = lsir.rsqrtf f32 %dst, %value : !amdgcn.vgpr, !amdgcn.vgpr
+    ```
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // SubIOp
 //===----------------------------------------------------------------------===//

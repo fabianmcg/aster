@@ -382,6 +382,12 @@ struct SqrtFOpPattern : public OpRewritePattern<lsir::SqrtFOp> {
                                 PatternRewriter &rewriter) const override;
 };
 
+struct RsqrtFOpPattern : public OpRewritePattern<lsir::RsqrtFOp> {
+  using Base::Base;
+  LogicalResult matchAndRewrite(lsir::RsqrtFOp op,
+                                PatternRewriter &rewriter) const override;
+};
+
 struct SubFOpPattern : public OpRewritePattern<lsir::SubFOp> {
   using Base::Base;
   LogicalResult matchAndRewrite(lsir::SubFOp op,
@@ -750,6 +756,20 @@ LogicalResult SqrtFOpPattern::matchAndRewrite(lsir::SqrtFOp op,
     return rewriter.notifyMatchFailure(op, "only f32 sqrt is supported");
   Value result =
       VSqrtF32::create(rewriter, op.getLoc(), op.getDst(), op.getValue())
+          .getDst0Res();
+  rewriter.replaceOp(op, result);
+  return success();
+}
+
+LogicalResult
+RsqrtFOpPattern::matchAndRewrite(lsir::RsqrtFOp op,
+                                 PatternRewriter &rewriter) const {
+  if (getOperandKind(op.getDst().getType()) != OperandKind::VGPR)
+    return rewriter.notifyMatchFailure(op, "float ops require VGPR dest");
+  if (op.getSemantics().getWidth() != 32)
+    return rewriter.notifyMatchFailure(op, "only f32 rsqrt is supported");
+  Value result =
+      VRsqF32::create(rewriter, op.getLoc(), op.getDst(), op.getValue())
           .getDst0Res();
   rewriter.replaceOp(op, result);
   return success();
@@ -3071,13 +3091,13 @@ void mlir::aster::amdgcn::populateToAMDGCNPatterns(
     RewritePatternSet &patterns) {
   patterns.add< // Arithmetic ops.
       AddFOpPattern, AddIOpPattern, AndIOpPattern, CmpIOpPattern, DivFOpPattern,
-      SqrtFOpPattern, SelectOpPattern, ExtFOpPattern, ExtSIOpPattern,
-      ExtUIOpPattern, TruncFOpPattern, SIToFPOpPattern, UIToFPOpPattern,
-      FPToSIOpPattern, FPToUIOpPattern, MaximumFOpPattern, MinimumFOpPattern,
-      MulFOpPattern, MulIOpPattern, MulHiSIOpPattern, OrIOpPattern,
-      ShLIOpPattern, ShRSIOpPattern, ShRUIOpPattern, SubFOpPattern,
-      SubIOpPattern, TruncIOpPattern, XOrIOpPattern, DivUIOpPattern,
-      RemUIOpPattern, DivSIOpPattern, RemSIOpPattern,
+      SqrtFOpPattern, RsqrtFOpPattern, SelectOpPattern, ExtFOpPattern,
+      ExtSIOpPattern, ExtUIOpPattern, TruncFOpPattern, SIToFPOpPattern,
+      UIToFPOpPattern, FPToSIOpPattern, FPToUIOpPattern, MaximumFOpPattern,
+      MinimumFOpPattern, MulFOpPattern, MulIOpPattern, MulHiSIOpPattern,
+      OrIOpPattern, ShLIOpPattern, ShRSIOpPattern, ShRUIOpPattern,
+      SubFOpPattern, SubIOpPattern, TruncIOpPattern, XOrIOpPattern,
+      DivUIOpPattern, RemUIOpPattern, DivSIOpPattern, RemSIOpPattern,
       // Memory ops.
       AllocaOpPattern, AssumeNoaliasOpPattern, LoadOpPattern, StoreOpPattern,
       // Data movement ops.

@@ -1,4 +1,4 @@
-// Kernel: C[i, j] = C[i, j] / sqrt(inv_d * sum(D[i, :]) + eps) for all rows i and columns j.
+// Kernel: C[i, j] = C[i, j] * rsqrt(inv_d * sum(D[i, :]) + eps) for all rows i and columns j.
 //
 // C is column-major bf16 (2 bytes per element), i.e. C[i, j] lives at element
 // offset j * M + i.  D is row-major f32 (4 bytes per element), i.e. D[i, k]
@@ -12,13 +12,13 @@
 //   each row r in [0, 64), each lane loads D[wavefrontRowBase + r, laneId]
 //   (or 0.0 when laneId >= n_d or row >= m), then a 6-round butterfly
 //   reduces the 64 lanes so every lane holds the full row sum.  All lanes
-//   then compute sqrt(inv_d * sum + eps) and write it to LDS at
-//   (waveId * 64 + r) * 4; concurrent same-address writes are safe because
-//   all lanes carry the same value after the butterfly.
-//   Phase 2: s_barrier so all waves see the LDS denominators.
+//   then compute rsqrt(inv_d * sum + eps) (the reciprocal square root) and
+//   write it to LDS at (waveId * 64 + r) * 4; concurrent same-address writes
+//   are safe because all lanes carry the same value after the butterfly.
+//   Phase 2: s_barrier so all waves see the LDS scales.
 //   Phase 3 (all threads): each thread owns globalRow = bid.x * 256 + tid.
-//   It reads its denominator from LDS[tid * 4] and, for each column j in
-//   [bid.y * 256, min(bid.y * 256 + 256, n)), divides C[globalRow, j] by it.
+//   It reads its scale from LDS[tid * 4] and, for each column j in
+//   [bid.y * 256, min(bid.y * 256 + 256, n)), multiplies C[globalRow, j] by it.
 //
 // Shared memory: 256 rows * 4 bytes = 1024 bytes.
 
@@ -64,7 +64,7 @@ amdgcn.module @colv2_mod target = #amdgcn.target<gfx942> {
     %lane_i32 = arith.index_cast %lane_idx : index to i32
 
     // -------------------------------------------------------------------------
-    // Phase 1: all waves accumulate D row sums and write denominators to LDS.
+    // Phase 1: all waves accumulate D row sums and write scales to LDS.
     // Each wave covers 64 rows: wavefrontRowBase = bid.x * 256 + wid * 64.
     // -------------------------------------------------------------------------
 
@@ -136,51 +136,51 @@ amdgcn.module @colv2_mod target = #amdgcn.target<gfx942> {
         scf.yield %ns : !amdgcn.vgpr
       } {aster.constexpr}
 
-      // Compute the denominator sqrt(inv_d * sum + eps) before storing so
-      // LDS holds the value that phase 3 will divide by directly.
-      %sum_f32    = lsir.from_reg %s6 : !amdgcn.vgpr -> f32
-      %scaled     = arith.mulf %inv_d, %sum_f32 : f32
-      %shifted    = arith.addf %scaled, %eps : f32
-      %shifted_v  = lsir.to_reg %shifted : f32 -> !amdgcn.vgpr
-      %sqrt_dst_v = lsir.alloca : !amdgcn.vgpr
-      %sqrt_v     = lsir.sqrtf f32 %sqrt_dst_v, %shifted_v : !amdgcn.vgpr, !amdgcn.vgpr
+      // Compute the scale rsqrt(inv_d * sum + eps) before storing so LDS holds
+      // the value that phase 3 will multiply by directly.
+      %sum_f32     = lsir.from_reg %s6 : !amdgcn.vgpr -> f32
+      %scaled      = arith.mulf %inv_d, %sum_f32 : f32
+      %shifted     = arith.addf %scaled, %eps : f32
+      %shifted_v   = lsir.to_reg %shifted : f32 -> !amdgcn.vgpr
+      %rsqrt_dst_v = lsir.alloca : !amdgcn.vgpr
+      %rsqrt_v     = lsir.rsqrtf f32 %rsqrt_dst_v, %shifted_v : !amdgcn.vgpr, !amdgcn.vgpr
 
-      // All lanes write the denominator to LDS at (wid * 64 + r) * 4.
+      // All lanes write the scale to LDS at (wid * 64 + r) * 4.
       // After the butterfly all lanes hold the same sum, so concurrent
       // writes to the same address are idempotent (any lane's value wins).
       %lds_elem_i = affine.apply #map_add(%wid64_idx, %r)
       %lds_byte_i = affine.apply #map_times4(%lds_elem_i)
       %lds_byte   = arith.index_cast %lds_byte_i : index to i32
       %lds_addr_v = lsir.to_reg %lds_byte : i32 -> !amdgcn.vgpr
-      %wtok = amdgcn.ds_write_b32 data %sqrt_v addr %lds_addr_v offset c(%c0_i32)
+      %wtok = amdgcn.ds_write_b32 data %rsqrt_v addr %lds_addr_v offset c(%c0_i32)
               : ins(!amdgcn.vgpr, !amdgcn.vgpr) mods(i32) -> !amdgcn.write_token<shared>
       %wf_w = amdgcn.wait deps %wtok
           : !amdgcn.write_token<shared> -> !amdgcn.fence_token
     } {aster.constexpr}
 
     // -------------------------------------------------------------------------
-    // Phase 2: synchronise so all LDS denominators are visible.
+    // Phase 2: synchronise so all LDS scales are visible.
     // -------------------------------------------------------------------------
     amdgcn.s_barrier
 
     // -------------------------------------------------------------------------
     // Phase 3: each thread owns globalRow = bid.x * 256 + tid, reads its
-    // denominator from LDS[tid * 4], and divides its column tile of C.
+    // scale from LDS[tid * 4], and multiplies its column tile of C.
     // -------------------------------------------------------------------------
     %grow_idx = affine.apply #map_add(%bid256_idx, %tid)
     %row_ok   = arith.cmpi ult, %grow_idx, %m_idx : index
 
     scf.if %row_ok {
-      // Read this thread's pre-computed denominator from LDS.
+      // Read this thread's pre-computed scale from LDS.
       %lds_byte_i = affine.apply #map_times4(%tid)
       %lds_byte   = arith.index_cast %lds_byte_i : index to i32
       %lds_addr_v = lsir.to_reg %lds_byte : i32 -> !amdgcn.vgpr
-      %denom_dst  = amdgcn.alloca : !amdgcn.vgpr
-      %denom_vgpr, %rtok = amdgcn.ds_read_b32 dest %denom_dst addr %lds_addr_v offset c(%c0_i32)
+      %scale_dst  = amdgcn.alloca : !amdgcn.vgpr
+      %scale_vgpr, %rtok = amdgcn.ds_read_b32 dest %scale_dst addr %lds_addr_v offset c(%c0_i32)
                  : outs(!amdgcn.vgpr) ins(!amdgcn.vgpr) mods(i32) -> !amdgcn.read_token<shared>
       %wf_rs = amdgcn.wait deps %rtok
           : !amdgcn.read_token<shared> -> !amdgcn.fence_token
-      %denom = lsir.from_reg %denom_vgpr : !amdgcn.vgpr -> f32
+      %scale = lsir.from_reg %scale_vgpr : !amdgcn.vgpr -> f32
 
       // Iterate over this thread's 256-column tile, clamped to [0, n).
       %jStart_idx       = affine.apply #map_elem(%bidy, %c0_idx)[%c256_idx]
@@ -199,7 +199,7 @@ amdgcn.module @colv2_mod target = #amdgcn.target<gfx942> {
         %cv_bf16  = ptr.load %ceptr
                       : !ptr.ptr<#amdgcn.addr_space<global, read_write>> -> bf16
         %cv_f32   = arith.extf %cv_bf16 : bf16 to f32
-        %cr_f32   = arith.divf %cv_f32, %denom : f32
+        %cr_f32   = arith.mulf %cv_f32, %scale : f32
         %cr_bf16  = arith.truncf %cr_f32 : f32 to bf16
         ptr.store %cr_bf16, %ceptr
             : bf16, !ptr.ptr<#amdgcn.addr_space<global, read_write>>

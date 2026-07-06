@@ -186,6 +186,11 @@ func.func @test_sqrtf(%dst: !amdgcn.vgpr, %value: !amdgcn.vgpr) -> !amdgcn.vgpr 
   return %0 : !amdgcn.vgpr
 }
 
+func.func @test_rsqrtf(%dst: !amdgcn.vgpr, %value: !amdgcn.vgpr) -> !amdgcn.vgpr {
+  %0 = lsir.rsqrtf f32 %dst, %value : !amdgcn.vgpr, !amdgcn.vgpr
+  return %0 : !amdgcn.vgpr
+}
+
 func.func @test_negf(%dst: !amdgcn.vgpr, %value: !amdgcn.vgpr) -> !amdgcn.vgpr {
   %0 = lsir.negf f32 %dst, %value : !amdgcn.vgpr, !amdgcn.vgpr
   return %0 : !amdgcn.vgpr
