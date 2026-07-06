@@ -3,7 +3,7 @@
 Kernel: colv2 in kernels/colv2.mlir.
 
 C is column-major bf16 (C[i,j] at element offset j*M+i); D is row-major f32.
-Constraint: n_d <= 64 (one D row per lane, reduced across a wavefront).
+n_d can be any positive value; Phase 1 accumulates D columns with a stride-64 inner loop.
 
 Grid: (ceil(M/256), ceil(N/256), 1).  Block: 256 threads = 4 wavefronts.
 """
@@ -28,7 +28,7 @@ BF16 = ml_dtypes.bfloat16
 INV_D = np.float32(1.0 / 32.0)
 EPS = np.float32(1e-5)
 
-# (M, N, n_d) — n_d <= 64.
+# (M, N, n_d) shapes; n_d may exceed 64.
 SHAPES = [
     # Small, exact multiples of 256.
     (256, 256, 32),
@@ -61,6 +61,12 @@ SHAPES = [
     # n_d=16 and n_d=8.
     (512, 256, 16),
     (256, 512, 8),
+    # n_d > 64.
+    (256, 256, 256),  # n_d=256 (4x wave)
+    (512, 512, 512),  # n_d=512 (8x wave)
+    (256, 128, 128),  # n_d=128, partial col tile via inner loop
+    (256, 256, 128),  # n_d=128
+    (512, 512, 100),  # n_d=100, non-multiple-of-64 partial final chunk
 ]
 
 

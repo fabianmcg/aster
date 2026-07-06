@@ -2,18 +2,19 @@
 //
 // C is column-major bf16 (2 bytes per element), i.e. C[i, j] lives at element
 // offset j * M + i.  D is row-major f32 (4 bytes per element), i.e. D[i, k]
-// lives at element offset i * n_d + k.  Constraint: n_d <= 64.
+// lives at element offset i * n_d + k.  n_d can be any positive value (no alignment required).
 //
 // Grid: bid.x selects a 256-row band; bid.y selects a 256-column tile.
 // Block: multiple of 64 threads (256 threads = 4 wavefronts at launch time).
 //
 // Algorithm:
 //   Phase 1 (all waves): each wavefront reduces 64 consecutive rows.  For
-//   each row r in [0, 64), each lane loads D[wavefrontRowBase + r, laneId]
-//   (or 0.0 when laneId >= n_d or row >= m), then a 6-round butterfly
-//   reduces the 64 lanes so every lane holds the full row sum.  Every lane
-//   computes rsqrt(inv_d * sum + eps) (the reciprocal square root), and lane 0
-//   writes it to LDS at (waveId * 64 + r) * 4.
+//   each row r in [0, 64), when row < m, an inner stride-64 loop over columns
+//   accumulates partial f32 sums across chunks of 64 columns: lane laneId
+//   covers columns laneId, laneId+64, laneId+128, ... until col >= n_d.
+//   A 6-round butterfly then reduces the 64 lanes so every lane holds the
+//   full row sum.  Every lane computes rsqrt(inv_d * sum + eps) (the
+//   reciprocal square root), and lane 0 writes it to LDS at (waveId * 64 + r) * 4.
 //   Phase 2: s_barrier so all waves see the LDS scales.
 //   Phase 3 (all threads): each thread owns globalRow = bid.x * 256 + tid.
 //   It reads its scale from LDS[tid * 4] and, for each column j in
@@ -85,35 +86,35 @@ amdgcn.module @colv2_mod target = #amdgcn.target<gfx942> {
     %wid64_idx      = affine.apply #map_elem(%wid_idx, %c0_idx)[%c64_idx]
     %wfRowBase_idx  = affine.apply #map_add(%bid256_idx, %wid64_idx)
 
-    // lane_ok is loop-invariant: hoist outside the Phase 1 loop.
-    %lane_ok = arith.cmpi ult, %lane_idx, %n_d_idx : index
-
     scf.for %r = %c0_idx to %c64_idx step %c1_idx {
       %row_idx = affine.apply #map_add(%wfRowBase_idx, %r)
 
-      // Predicate: load is valid only when lane < n_d AND row < m.
-      %row_ok  = arith.cmpi ult, %row_idx,  %m_idx   : index
-      %pred    = arith.andi %lane_ok, %row_ok : i1
-
-      // Compute element offset and force OOB on invalid lanes/rows.
-      // The buffer hardware bounds check drops the load silently; we
-      // additionally zero the value via arith.select so the accumulation
-      // is correct even for lanes that read a neighbouring live element.
-      %elem_idx    = affine.apply #map_elem(%row_idx, %lane_idx)[%n_d_idx]
-      %byte_off_i  = affine.apply #map_times4(%elem_idx)
-      %byte_off_ok = arith.index_cast %byte_off_i : index to i32
-      %byte_off    = arith.select %pred, %byte_off_ok, %cm1_i32 : i32
-      %voff        = lsir.to_reg %byte_off : i32 -> !amdgcn.vgpr
-      %load_dst    = amdgcn.alloca : !amdgcn.vgpr
-      %val, %tok   = amdgcn.buffer_load_dword dest %load_dst addr %d_rsrc
-                         offset u(%c0_s) + off_idx(%voff) + c(%c0_i32) {offen}
-                         : outs(!amdgcn.vgpr) ins(!amdgcn.sgpr<[? + 4]>, !amdgcn.sgpr, !amdgcn.vgpr)
-                           mods(i32) -> !amdgcn.read_token<flat>
-      %wf_ld = amdgcn.wait deps %tok
-          : !amdgcn.read_token<flat> -> !amdgcn.fence_token
-      %loaded_f32 = lsir.from_reg %val : !amdgcn.vgpr -> f32
-      // Zero out lanes that are OOB so they don't pollute the sum.
-      %v = arith.select %pred, %loaded_f32, %c0f : f32
+      // Guard: row >= m means no valid D data; use -1 offset so the hardware
+      // bounds check drops the load, then zero via select.
+      %row_ok = arith.cmpi ult, %row_idx, %m_idx : index
+      // Inner stride-64 loop: scf.for unsigned guarantees col < n_d; row_ok
+      // masks OOB rows via -1 offset and post-load select.
+      %v = scf.for unsigned %col = %lane_idx to %n_d_idx step %c64_idx
+          iter_args(%acc = %c0f) -> f32 {
+        %elem_idx    = affine.apply #map_elem(%row_idx, %col)[%n_d_idx]
+        %byte_off_i  = affine.apply #map_times4(%elem_idx)
+        %byte_off_ok = arith.index_cast %byte_off_i : index to i32
+        // Force OOB for invalid rows so the buffer hardware drops the load.
+        %byte_off    = arith.select %row_ok, %byte_off_ok, %cm1_i32 : i32
+        %voff        = lsir.to_reg %byte_off : i32 -> !amdgcn.vgpr
+        %load_dst    = amdgcn.alloca : !amdgcn.vgpr
+        %val, %tok   = amdgcn.buffer_load_dword dest %load_dst addr %d_rsrc
+                           offset u(%c0_s) + off_idx(%voff) + c(%c0_i32) {offen}
+                           : outs(!amdgcn.vgpr) ins(!amdgcn.sgpr<[? + 4]>, !amdgcn.sgpr, !amdgcn.vgpr)
+                             mods(i32) -> !amdgcn.read_token<flat>
+        %wf_ld = amdgcn.wait deps %tok
+            : !amdgcn.read_token<flat> -> !amdgcn.fence_token
+        %val_f32 = lsir.from_reg %val : !amdgcn.vgpr -> f32
+        // Zero out OOB rows so they don't pollute the sum.
+        %masked  = arith.select %row_ok, %val_f32, %c0f : f32
+        %new_acc = arith.addf %acc, %masked : f32
+        scf.yield %new_acc : f32
+      }
 
       // Butterfly reduction: 6 constexpr rounds, strides 1, 2, 4, 8, 16, 32.
       // After 6 rounds lane 0 holds the full row sum.
@@ -159,7 +160,7 @@ amdgcn.module @colv2_mod target = #amdgcn.target<gfx942> {
         %wf_w = amdgcn.wait deps %wtok
             : !amdgcn.write_token<shared> -> !amdgcn.fence_token
       }
-    } {aster.constexpr}
+    }
 
     // -------------------------------------------------------------------------
     // Phase 2: synchronise so all LDS scales are visible.

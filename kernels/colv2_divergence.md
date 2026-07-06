@@ -129,7 +129,7 @@ and columns 64..n_d-1 are silently ignored. The row sum — and therefore every 
 value in C — will be wrong.
 
 **Recommendation:** Add a precondition assertion in the Python driver (bench/test), or
-a
+al
 ---
 
 ### Issue B — `i32` byte-offset truncation for large matrices ⚠️
