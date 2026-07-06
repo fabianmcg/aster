@@ -62,6 +62,7 @@ amdgcn.module @colv2_mod target = #amdgcn.target<gfx942> {
     %wid_idx  = affine.apply #map_wid(%tid)
     %lane_i32 = arith.index_cast %lane_idx : index to i32
     %is_lane0 = arith.cmpi eq, %lane_i32, %c0_i32 : i32
+    %lane_v   = lsir.to_reg %lane_i32  : i32 -> !amdgcn.vgpr
 
     // -------------------------------------------------------------------------
     // Phase 1: all waves accumulate D row sums and write scales to LDS.
@@ -114,8 +115,7 @@ amdgcn.module @colv2_mod target = #amdgcn.target<gfx942> {
 
       // Butterfly reduction: 6 constexpr rounds, strides 1, 2, 4, 8, 16, 32.
       // After 6 rounds lane 0 holds the full row sum.
-      %partial_v = lsir.to_reg %v         : f32 -> !amdgcn.vgpr
-      %lane_v    = lsir.to_reg %lane_i32  : i32 -> !amdgcn.vgpr
+      %partial_v = lsir.to_reg %v : f32 -> !amdgcn.vgpr
       %s6 = scf.for %round = %c0_idx to %c6_idx step %c1_idx
           iter_args(%acc = %partial_v) -> !amdgcn.vgpr {
         %stride_idx = arith.shli %c1_idx, %round : index
