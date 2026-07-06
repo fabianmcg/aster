@@ -344,6 +344,12 @@ LogicalResult ConvertSCFControlFlow::convertDivergentIfOp(scf::IfOp ifOp) {
     rewriter.setInsertionPointToEnd(bbElse);
     aster_utils::SetCfMaskOp::create(rewriter, loc, saved, Value{}, UnitAttr{});
     cf::BranchOp::create(rewriter, loc, bbMerge, ValueRange());
+  } else {
+    // Without an else block, the false edge jumps directly to bbMerge. Restore
+    // the saved EXEC mask at the top of bbMerge so the skip path does not leave
+    // EXEC narrowed for subsequent code.
+    rewriter.setInsertionPointToStart(bbMerge);
+    aster_utils::SetCfMaskOp::create(rewriter, loc, saved, Value{}, UnitAttr{});
   }
 
   rewriter.eraseOp(ifOp);
