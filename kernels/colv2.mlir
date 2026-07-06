@@ -11,10 +11,9 @@
 //   Phase 1 (all waves): each wavefront reduces 64 consecutive rows.  For
 //   each row r in [0, 64), each lane loads D[wavefrontRowBase + r, laneId]
 //   (or 0.0 when laneId >= n_d or row >= m), then a 6-round butterfly
-//   reduces the 64 lanes so every lane holds the full row sum.  All lanes
-//   then compute rsqrt(inv_d * sum + eps) (the reciprocal square root) and
-//   write it to LDS at (waveId * 64 + r) * 4; concurrent same-address writes
-//   are safe because all lanes carry the same value after the butterfly.
+//   reduces the 64 lanes so every lane holds the full row sum.  Every lane
+//   computes rsqrt(inv_d * sum + eps) (the reciprocal square root), and lane 0
+//   writes it to LDS at (waveId * 64 + r) * 4.
 //   Phase 2: s_barrier so all waves see the LDS scales.
 //   Phase 3 (all threads): each thread owns globalRow = bid.x * 256 + tid.
 //   It reads its scale from LDS[tid * 4] and, for each column j in
@@ -62,6 +61,7 @@ amdgcn.module @colv2_mod target = #amdgcn.target<gfx942> {
     %lane_idx = affine.apply #map_lane(%tid)
     %wid_idx  = affine.apply #map_wid(%tid)
     %lane_i32 = arith.index_cast %lane_idx : index to i32
+    %is_lane0 = arith.cmpi eq, %lane_i32, %c0_i32 : i32
 
     // -------------------------------------------------------------------------
     // Phase 1: all waves accumulate D row sums and write scales to LDS.
@@ -145,17 +145,18 @@ amdgcn.module @colv2_mod target = #amdgcn.target<gfx942> {
       %rsqrt_dst_v = lsir.alloca : !amdgcn.vgpr
       %rsqrt_v     = lsir.rsqrtf f32 %rsqrt_dst_v, %shifted_v : !amdgcn.vgpr, !amdgcn.vgpr
 
-      // All lanes write the scale to LDS at (wid * 64 + r) * 4.
-      // After the butterfly all lanes hold the same sum, so concurrent
-      // writes to the same address are idempotent (any lane's value wins).
+      // Lane 0 writes the scale to LDS at (wid * 64 + r) * 4.  After the
+      // butterfly all lanes hold the same sum, so only lane 0 needs to store.
       %lds_elem_i = affine.apply #map_add(%wid64_idx, %r)
       %lds_byte_i = affine.apply #map_times4(%lds_elem_i)
       %lds_byte   = arith.index_cast %lds_byte_i : index to i32
       %lds_addr_v = lsir.to_reg %lds_byte : i32 -> !amdgcn.vgpr
-      %wtok = amdgcn.ds_write_b32 data %rsqrt_v addr %lds_addr_v offset c(%c0_i32)
-              : ins(!amdgcn.vgpr, !amdgcn.vgpr) mods(i32) -> !amdgcn.write_token<shared>
-      %wf_w = amdgcn.wait deps %wtok
-          : !amdgcn.write_token<shared> -> !amdgcn.fence_token
+      scf.if %is_lane0 {
+        %wtok = amdgcn.ds_write_b32 data %rsqrt_v addr %lds_addr_v offset c(%c0_i32)
+                : ins(!amdgcn.vgpr, !amdgcn.vgpr) mods(i32) -> !amdgcn.write_token<shared>
+        %wf_w = amdgcn.wait deps %wtok
+            : !amdgcn.write_token<shared> -> !amdgcn.fence_token
+      }
     } {aster.constexpr}
 
     // -------------------------------------------------------------------------
