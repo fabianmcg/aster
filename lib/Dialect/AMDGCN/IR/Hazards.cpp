@@ -741,8 +741,8 @@ bool CDNA3TransOpHazardAttr::matchInst(AMDGCNInstOpInterface instOp,
                                        ISAVersion isaVer) const {
   if (!instOp.supportsISA(isaVer))
     return false;
-  // Hazard fires on non-trans VALU consumers.
-  return instOp.hasProp(InstProp::IsValu) && !instOp.hasProp(InstProp::Trans);
+  // Trans ops are the producers that raise this hazard.
+  return instOp.hasProp(InstProp::Trans);
 }
 
 void CDNA3TransOpHazardAttr::populateHazardsFor(
@@ -1456,6 +1456,7 @@ void HazardManager::getHazardRaisersFor(
     hazardRaisers.push_back(CDNA3SaluM0LdsHazardAttr::get(ctx));
     hazardRaisers.push_back(CDNA3StoreHazardAttr::get(ctx));
     hazardRaisers.push_back(CDNA3StoreWriteDataHazardAttr::get(ctx));
+    hazardRaisers.push_back(CDNA3TransOpHazardAttr::get(ctx));
     hazardRaisers.push_back(CDNA3VccExecVcczExeczHazardAttr::get(ctx));
     hazardRaisers.push_back(CDNA3ValuSgprVmemHazardAttr::get(ctx));
     hazardRaisers.push_back(CDNA3ValuVgprReadlaneHazardAttr::get(ctx));
